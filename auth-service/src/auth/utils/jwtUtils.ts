@@ -21,7 +21,7 @@ export const generateToken = (
   };
 
   const options: jwt.SignOptions = {
-    expiresIn: "1h",
+    expiresIn: "2m",
   };
 
   return jwt.sign(payload, JWT_SECRET, options);
