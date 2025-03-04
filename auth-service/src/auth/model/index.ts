@@ -59,10 +59,4 @@ User.init(
   }
 );
 
-// Sync model (optional, for dev setup)
-// (async () => {
-//   await User.sync({ force: false });
-//   console.log('Users table synced');
-// })();
-
 export default User;
