@@ -1,6 +1,6 @@
 import bcrypt from "bcrypt";
 import { TAuthSchema } from "../validations";
-import { generateToken } from "../utils/jwtUtils";
+import { generateToken } from "../utils/generateToken";
 import User from "../model";
 import { getExpirationFromToken } from "../utils/getExpirationFromToken";
 

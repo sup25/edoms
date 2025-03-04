@@ -1,9 +1,9 @@
 import request from "supertest";
-import { app } from "../../index";
+import { app } from "../index";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import User from "../model";
-import connect from "../../config/db";
+import connect from "../config/db";
 
 let server: any;
 

@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { STATUS_CODES } from "../constants";
 import { verifyToken } from "../utils/verifyToken";
-import { generateToken } from "../utils/jwtUtils";
+import { generateToken } from "../utils/generateToken";
 
 export const authMiddleware = (
   req: Request,

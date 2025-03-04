@@ -4,7 +4,7 @@ import {
   InferAttributes,
   InferCreationAttributes,
 } from "sequelize";
-import connect from "../../config/db";
+import connect from "../config/db";
 
 interface UserAttributes extends InferAttributes<User> {}
 interface UserCreationAttributes

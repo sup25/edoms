@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import { JWT_SECRET } from "./jwtUtils";
+import { JWT_SECRET } from "./generateToken";
 
 export const verifyToken = (token: string): any => {
   if (!JWT_SECRET) {

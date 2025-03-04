@@ -1,5 +1,5 @@
-import User from "./auth/model";
-import router from "./auth/route";
+import User from "./model";
+import router from "./route";
 import connect from "./config/db";
 import express from "express";
 
