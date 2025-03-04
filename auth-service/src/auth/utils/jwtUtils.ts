@@ -12,17 +12,10 @@ if (!JWT_SECRET) {
 export const generateToken = (
   userId: string,
   email: string,
-  role: string
+  role: string,
+  expiresIn: jwt.SignOptions["expiresIn"] = "2m"
 ): string => {
-  const payload = {
-    userId,
-    email,
-    role,
-  };
+  const payload = { userId, email, role };
 
-  const options: jwt.SignOptions = {
-    expiresIn: "2m",
-  };
-
-  return jwt.sign(payload, JWT_SECRET, options);
+  return jwt.sign(payload, JWT_SECRET, { expiresIn });
 };

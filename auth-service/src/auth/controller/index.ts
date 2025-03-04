@@ -34,18 +34,22 @@ export const registerUserController = expressAsyncHandler(
   }
 );
 
-export const loginUserController = expressAsyncHandler(
+export const userLoginController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const { email, password } = req.body;
 
     try {
-      const { token, expiresAt } = await userLogin({ email, password });
+      const { accessToken, refreshToken, expiresAt } = await userLogin({
+        email,
+        password,
+      });
 
       res.status(STATUS_CODES.OK).json({
         success: true,
         message: "User logged in successfully",
         data: {
-          token,
+          accessToken,
+          refreshToken,
           expiresAt: expiresAt ? expiresAt.toISOString() : null,
         },
       });

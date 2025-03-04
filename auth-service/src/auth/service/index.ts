@@ -4,6 +4,11 @@ import { generateToken } from "../utils/jwtUtils";
 import User from "../model";
 import { getExpirationFromToken } from "../utils/getExpirationFromToken";
 
+type TTokenResponse = {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: Date | null;
+};
 export const userRegister = async ({
   email,
   password,
@@ -29,7 +34,7 @@ export const userRegister = async ({
 export const userLogin = async ({
   email,
   password,
-}: TAuthSchema): Promise<{ token: string; expiresAt: Date | null }> => {
+}: TAuthSchema): Promise<TTokenResponse> => {
   // Find user by email
   const user = await User.findOne({ where: { email } });
   if (!user) {
@@ -43,10 +48,21 @@ export const userLogin = async ({
   }
 
   // Generate JWT
-  const token = generateToken(user.id.toString(), user.email, user.role);
+  const accessToken = generateToken(
+    user.id.toString(),
+    user.email,
+    user.role,
+    "2m"
+  );
+  const refreshToken = generateToken(
+    user.id.toString(),
+    user.email,
+    user.role,
+    "7d"
+  );
 
   // Get expiration date
-  const expiresAt = getExpirationFromToken(token);
+  const expiresAt = getExpirationFromToken(accessToken);
 
-  return { token, expiresAt };
+  return { accessToken, refreshToken, expiresAt };
 };

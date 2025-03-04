@@ -1,11 +1,11 @@
 import express, { Request, Response } from "express";
-import { loginUserController, registerUserController } from "../controller";
+import { userLoginController, registerUserController } from "../controller";
 import { authMiddleware } from "../middleware";
 
 const router = express.Router();
 
 router.post("/register", registerUserController);
-router.post("/login", loginUserController);
+router.post("/login", userLoginController);
 
 router.get("/protected", authMiddleware, (req: Request, res: Response) => {
   res.status(200).json({
