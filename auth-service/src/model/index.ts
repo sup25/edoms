@@ -5,6 +5,7 @@ import {
   InferCreationAttributes,
 } from "sequelize";
 import connect from "../config/db";
+import { ERole } from "../types";
 
 interface UserAttributes extends InferAttributes<User> {}
 interface UserCreationAttributes
@@ -14,7 +15,7 @@ class User extends Model<UserAttributes, UserCreationAttributes> {
   public id!: number;
   public email!: string;
   public password_hash!: string;
-  public role!: "user" | "admin";
+  public role!: ERole;
   public created_at!: Date;
   public updated_at?: Date | null;
 }
@@ -37,7 +38,7 @@ User.init(
       allowNull: false,
     },
     role: {
-      type: DataTypes.ENUM("user", "admin"),
+      type: DataTypes.ENUM(...Object.values(ERole)),
       allowNull: false,
       defaultValue: "user",
     },

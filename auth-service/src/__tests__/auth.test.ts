@@ -4,6 +4,7 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import User from "../model";
 import connect from "../config/db";
+import { ERole } from "../types";
 
 let server: any;
 
@@ -25,7 +26,7 @@ beforeAll(async () => {
     await User.create({
       email: "test@example.com",
       password_hash: hashedPassword,
-      role: "user",
+      role: ERole.User,
     });
     console.log("Test user created");
   } catch (error) {
@@ -57,9 +58,9 @@ afterAll(async () => {
 });
 
 describe("Auth Flow", () => {
-  test("POST /api/v1/user/login - should return access and refresh tokens", async () => {
+  test("POST /api/v1/login - should return access and refresh tokens", async () => {
     const response = await request(app)
-      .post("/api/v1/user/login")
+      .post("/api/v1/login")
       .send({ email: "test@example.com", password: "password123" });
 
     expect(response.status).toBe(200);
@@ -69,16 +70,16 @@ describe("Auth Flow", () => {
     expect(response.body.data).toHaveProperty("expiresAt");
   });
 
-  test("GET /api/v1/user/protected - should allow access with valid token", async () => {
+  test("GET /api/v1/protected - should allow access with valid token", async () => {
     const loginResponse = await request(app)
-      .post("/api/v1/user/login")
+      .post("/api/v1/login")
       .send({ email: "test@example.com", password: "password123" });
 
     const accessToken = loginResponse.body.data.accessToken;
     const refreshToken = loginResponse.body.data.refreshToken;
 
     const response = await request(app)
-      .get("/api/v1/user/protected")
+      .get("/api/v1/protected")
       .set("Authorization", `Bearer ${accessToken}`)
       .set("x-refresh-token", refreshToken);
 
@@ -89,9 +90,9 @@ describe("Auth Flow", () => {
     );
   });
 
-  test("GET /api/v1/user/protected - should refresh token when access token expires", async () => {
+  test("GET /api/v1/protected - should refresh token when access token expires", async () => {
     const loginResponse = await request(app)
-      .post("/api/v1/user/login")
+      .post("/api/v1/login")
       .send({ email: "test@example.com", password: "password123" });
     const refreshToken = loginResponse.body.data.refreshToken;
 
@@ -106,7 +107,7 @@ describe("Auth Flow", () => {
     );
 
     const response = await request(app)
-      .get("/api/v1/user/protected")
+      .get("/api/v1/protected")
       .set("Authorization", `Bearer ${expiredToken}`)
       .set("x-refresh-token", refreshToken);
 
@@ -114,7 +115,7 @@ describe("Auth Flow", () => {
     expect(response.headers["x-new-access-token"]).toBeDefined();
   });
 
-  test("GET /api/v1/user/protected - should fail without refresh token", async () => {
+  test("GET /api/v1/protected - should fail without refresh token", async () => {
     const expiredToken = jwt.sign(
       {
         userId: "1",
@@ -126,7 +127,7 @@ describe("Auth Flow", () => {
     );
 
     const response = await request(app)
-      .get("/api/v1/user/protected")
+      .get("/api/v1/protected")
       .set("Authorization", `Bearer ${expiredToken}`);
 
     expect(response.status).toBe(401);

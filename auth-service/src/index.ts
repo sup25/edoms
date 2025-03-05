@@ -17,7 +17,7 @@ import express from "express";
 const app = express();
 
 app.use(express.json());
-app.use("/api/v1/user", router);
+app.use("/api/v1", router);
 
 const PORT = process.env.PORT || 5000;
 if (process.env.NODE_ENV !== "test") {
