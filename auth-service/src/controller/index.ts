@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { adminRegister, Login, userRegister } from "../service";
+import { adminRegister, loginService, userRegister } from "../service";
 import expressAsyncHandler from "express-async-handler";
 import { STATUS_CODES } from "../constants";
 import { ERole } from "../types";
@@ -69,10 +69,11 @@ export const LoginController = expressAsyncHandler(
     const { email, password } = req.body;
 
     try {
-      const { accessToken, refreshToken, expiresAt, isAdmin } = await Login({
-        email,
-        password,
-      });
+      const { accessToken, refreshToken, expiresAt, isAdmin } =
+        await loginService({
+          email,
+          password,
+        });
 
       const messageMap: { [key in ERole]: string } = {
         admin: "Admin logged in successfully",
@@ -80,6 +81,7 @@ export const LoginController = expressAsyncHandler(
       };
       const userRole = isAdmin ? ERole.Admin : ERole.User;
       const loginMessage = messageMap[userRole];
+
       res.status(STATUS_CODES.OK).json({
         success: true,
         message: loginMessage,

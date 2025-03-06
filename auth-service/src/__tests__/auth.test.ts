@@ -26,7 +26,7 @@ beforeAll(async () => {
     await User.create({
       email: "test@example.com",
       password_hash: hashedPassword,
-      role: ERole.User,
+      role: ERole.Admin,
     });
     console.log("Test user created");
   } catch (error) {

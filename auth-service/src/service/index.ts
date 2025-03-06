@@ -40,7 +40,7 @@ export const userRegister = async ({
   return token;
 };
 
-export const Login = async ({
+export const loginService = async ({
   email,
   password,
 }: TAuthSchema): Promise<TLoginResponse> => {

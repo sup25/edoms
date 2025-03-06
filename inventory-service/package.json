@@ -1,0 +1,31 @@
+{
+  "name": "inventory-service",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "nodemon --exec ts-node-dev --respawn src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/amqplib": "^0.10.7",
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.5",
+    "dotenv": "^16.4.7",
+    "express-async-handler": "^1.2.0",
+    "nodemon": "^3.1.9",
+    "pg": "^8.13.3",
+    "sequelize": "^6.37.6",
+    "ts-node-dev": "^2.0.0",
+    "zod": "^3.24.2"
+  }
+}
