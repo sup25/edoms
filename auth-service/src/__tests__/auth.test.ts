@@ -9,34 +9,31 @@ import { ERole } from "../types";
 let server: any;
 
 beforeAll(async () => {
-  // Set environment variables for testing
   process.env.JWT_SECRET = "test-secret";
 
-  // Start the server explicitly for tests
   server = app.listen(5001, () => {
     console.log("Test server running on port 5001");
   });
 
-  // Ensure database connection and sync
   try {
     await connect.authenticate();
     console.log("Database connection successful");
     await User.sync({ force: true }); // Reset table for tests
     const hashedPassword = await bcrypt.hash("password123", 10);
-    await User.create({
+    const testUser = await User.create({
       email: "test@example.com",
       password_hash: hashedPassword,
       role: ERole.Admin,
     });
     console.log("Test user created");
+    console.log("Test user created with ID:", testUser.id);
   } catch (error) {
     console.error("Database setup error:", error);
-    throw error; // Fail fast if setup fails
+    throw error;
   }
 });
 
 afterAll(async () => {
-  // Cleanup database
   try {
     await User.destroy({ where: { email: "test@example.com" } });
     await connect.close();
@@ -45,14 +42,13 @@ afterAll(async () => {
     console.error("Database cleanup error:", error);
   }
 
-  // Stop the server
   await new Promise<void>((resolve) => {
     server.close(() => {
       console.log("Test server closed");
       resolve();
     });
   });
-  // Remove all listeners to prevent the server from hanging
+
   process.removeAllListeners("SIGTERM");
   process.removeAllListeners("SIGINT");
 });
@@ -76,12 +72,10 @@ describe("Auth Flow", () => {
       .send({ email: "test@example.com", password: "password123" });
 
     const accessToken = loginResponse.body.data.accessToken;
-    const refreshToken = loginResponse.body.data.refreshToken;
 
     const response = await request(app)
       .get("/api/v1/protected")
-      .set("Authorization", `Bearer ${accessToken}`)
-      .set("x-refresh-token", refreshToken);
+      .set("Authorization", `Bearer ${accessToken}`);
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
@@ -90,32 +84,7 @@ describe("Auth Flow", () => {
     );
   });
 
-  test("GET /api/v1/protected - should refresh token when access token expires", async () => {
-    const loginResponse = await request(app)
-      .post("/api/v1/login")
-      .send({ email: "test@example.com", password: "password123" });
-    const refreshToken = loginResponse.body.data.refreshToken;
-
-    const expiredToken = jwt.sign(
-      {
-        userId: "1",
-        email: "test@example.com",
-        role: "user",
-        exp: Math.floor(Date.now() / 1000) - 60, // Expired 60 seconds ago
-      },
-      process.env.JWT_SECRET!
-    );
-
-    const response = await request(app)
-      .get("/api/v1/protected")
-      .set("Authorization", `Bearer ${expiredToken}`)
-      .set("x-refresh-token", refreshToken);
-
-    expect(response.status).toBe(200);
-    expect(response.headers["x-new-access-token"]).toBeDefined();
-  });
-
-  test("GET /api/v1/protected - should fail without refresh token", async () => {
+  test("GET /api/v1/protected - should fail when access token expires", async () => {
     const expiredToken = jwt.sign(
       {
         userId: "1",
@@ -131,6 +100,50 @@ describe("Auth Flow", () => {
       .set("Authorization", `Bearer ${expiredToken}`);
 
     expect(response.status).toBe(401);
-    expect(response.body.message).toBe("Refresh token required");
+    expect(response.body.message).toBe("Invalid or expired token");
+  });
+
+  test("POST /api/v1/refresh - should issue a new access token", async () => {
+    const loginResponse = await request(app)
+      .post("/api/v1/login")
+      .send({ email: "test@example.com", password: "password123" });
+
+    const refreshToken = loginResponse.body.data.refreshToken;
+    expect(refreshToken).toBeDefined();
+
+    const response = await request(app)
+      .post("/api/v1/refresh")
+      .set("x-refresh-token", refreshToken);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data).toHaveProperty("accessToken");
+  });
+
+  test("POST /api/v1/refresh - should fail with invalid refresh token", async () => {
+    const invalidRefreshToken = "invalid.token.here";
+
+    const response = await request(app)
+      .post("/api/v1/refresh")
+      .set("x-refresh-token", invalidRefreshToken);
+
+    expect(response.status).toBe(401);
+    expect(response.body.message).toBe("Invalid or expired refresh token");
+  });
+
+  test("POST /api/v1/refresh - should fail when no refresh token is provided", async () => {
+    const response = await request(app).post("/api/v1/refresh");
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toBe("Refresh token not provided");
+  });
+
+  test("POST /api/v1/refresh - should fail with empty refresh token header", async () => {
+    const response = await request(app)
+      .post("/api/v1/refresh")
+      .set("x-refresh-token", "");
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toBe("Refresh token not provided");
   });
 });

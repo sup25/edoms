@@ -2,9 +2,10 @@ import bcrypt from "bcrypt";
 import { generateToken } from "../utils/generateToken";
 import User from "../model";
 import { getExpirationFromToken } from "../utils/getExpirationFromToken";
-import { ERole, TAuthSchema, TLoginResponse } from "../types";
+import { ERole, TAuthSchema, TLoginResponse, TTokenPayload } from "../types";
+import { verifyToken } from "../utils/verifyToken";
 
-export const adminRegister = async ({
+export const adminRegisterService = async ({
   email,
   password,
 }: TAuthSchema): Promise<string> => {
@@ -26,7 +27,7 @@ export const adminRegister = async ({
   return token;
 };
 
-export const userRegister = async ({
+export const userRegisterService = async ({
   email,
   password,
 }: TAuthSchema): Promise<string> => {
@@ -60,7 +61,7 @@ export const loginService = async ({
     user.id.toString(),
     user.email,
     user.role,
-    "2m"
+    "5m"
   );
   const refreshToken = generateToken(
     user.id.toString(),
@@ -73,4 +74,23 @@ export const loginService = async ({
   const expiresAt = getExpirationFromToken(accessToken);
 
   return { accessToken, refreshToken, expiresAt, isAdmin };
+};
+
+export const refreshAccessTokenService = async (
+  refreshToken: string
+): Promise<string> => {
+  const decoded = verifyToken(refreshToken) as TTokenPayload;
+  console.log("Decoded Token:", decoded); // Debug
+  const user = await User.findByPk(decoded.userId);
+  if (!user) {
+    throw new Error("User not found");
+  }
+  const accessToken = generateToken(
+    user.id.toString(),
+    user.email,
+    user.role,
+    "5m"
+  );
+  console.log("generated access token:", accessToken);
+  return accessToken;
 };

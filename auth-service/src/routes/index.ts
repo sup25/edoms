@@ -1,16 +1,25 @@
 import express, { Request, Response } from "express";
 import {
-  adminRegisterController,
+  adminRegisterServiceController,
   LoginController,
-  userRegisterController,
+  RefreshAccessTokenController,
+  userRegisterServiceController,
 } from "../controller";
 import { authMiddleware } from "../middleware/authMiddleware";
 import { validate } from "../middleware/validateRequest";
 import { authSchema } from "../validations";
 
 const router = express.Router();
-router.post("/admin/register", validate(authSchema), adminRegisterController);
-router.post("/user/register", validate(authSchema), userRegisterController);
+router.post(
+  "/admin/register",
+  validate(authSchema),
+  adminRegisterServiceController
+);
+router.post(
+  "/user/register",
+  validate(authSchema),
+  userRegisterServiceController
+);
 router.post("/login", validate(authSchema), LoginController);
 
 router.get("/protected", authMiddleware, (req: Request, res: Response) => {
@@ -20,5 +29,7 @@ router.get("/protected", authMiddleware, (req: Request, res: Response) => {
     data: req.user,
   });
 });
+
+router.post("/refresh", RefreshAccessTokenController);
 
 export default router;

@@ -1,5 +1,5 @@
 import User from "./model";
-import router from "./route";
+import router from "./routes";
 import connect from "./config/db";
 import express from "express";
 
