@@ -1,0 +1,31 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build artifacts
+dist/
+build/
+
+# Environment variables
+.env
+*.env
+
+# Logs
+logs/
+*.log
+
+# Dependency lock files (optional, depending on your preference)
+package-lock.json
+yarn.lock
+
+# Test artifacts
+coverage/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/

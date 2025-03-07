@@ -14,3 +14,9 @@ export type TLoginResponse = {
 };
 
 export type TAuthSchema = z.infer<typeof authSchema>;
+
+export type TTokenPayload = {
+  userId: string;
+  email: string;
+  role: ERole;
+};
