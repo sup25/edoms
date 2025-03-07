@@ -3,9 +3,17 @@ import { ZodError, ZodSchema } from "zod";
 import { STATUS_CODES } from "../constants";
 
 export const validate =
-  (schema: ZodSchema) => (req: Request, res: Response, next: NextFunction) => {
+  (bodySchema?: ZodSchema, paramsSchema?: ZodSchema) =>
+  (req: Request, res: Response, next: NextFunction) => {
     try {
-      req.body = schema.parse(req.body);
+      req.body = bodySchema?.parse(req.body);
+
+      if (paramsSchema) {
+        req.params = paramsSchema.parse(req.params);
+      }
+      if (!bodySchema && !paramsSchema) {
+        throw new Error("At least one schema must be provided");
+      }
       next();
     } catch (error) {
       const zodError = error as ZodError;
