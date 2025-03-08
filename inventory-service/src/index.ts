@@ -1,4 +1,8 @@
-import { subscribeToEvents } from "./rabbitmq/subscriber";
-subscribeToEvents("user_events", async (event) => {
-  console.log(`Received: ${event.event}, User: ${event.userId}`);
-});
+import { subscribeToProductEvents } from "./rabbitmq/subscriber";
+
+async function startService() {
+  await subscribeToProductEvents();
+  console.log("Inventory service started");
+}
+
+startService();

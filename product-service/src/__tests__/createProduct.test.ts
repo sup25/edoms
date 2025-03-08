@@ -38,6 +38,7 @@ describe("POST /api/v1/createproduct", () => {
       name: "Test Product",
       price: 10.0,
       slug: "test-product-test",
+      initialStock: 5,
     };
 
     mockedService.createProductService.mockResolvedValue(
@@ -51,6 +52,7 @@ describe("POST /api/v1/createproduct", () => {
         name: "Test Product",
         price: 10.0,
         slug: "test-product",
+        initialStock: 5,
       });
 
     expect(response.status).toBe(201);
@@ -73,6 +75,7 @@ describe("POST /api/v1/createproduct", () => {
         name: "Test Product",
         price: 10.0,
         slug: "test-product",
+        initialStock: 5,
       });
 
     expect(response.status).toBe(400);
@@ -95,6 +98,7 @@ describe("POST /api/v1/createproduct", () => {
         name: "Test Product",
         price: 10.0,
         slug: "test-product",
+        initialStock: 5,
       });
 
     expect(response.status).toBe(500);
