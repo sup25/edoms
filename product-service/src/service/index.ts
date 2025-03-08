@@ -5,12 +5,13 @@ export const createProductService = async ({
   name,
   price,
   slug,
+  initialStock,
 }: TCreateProductRequest) => {
   const existingProduct = await Product.findOne({ where: { slug } });
   if (existingProduct) {
     throw new Error("Slug already exists. Please use a different slug.");
   }
-  const product = await Product.create({ name, price, slug });
+  const product = await Product.create({ name, price, slug, initialStock });
   return product;
 };
 

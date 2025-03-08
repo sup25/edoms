@@ -8,12 +8,21 @@ import {
   updateProductService,
 } from "../service";
 import { STATUS_CODES } from "../constants";
+import { publishEvent } from "../rabbitmq/publisher";
 
 export const createProductController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {
-    const { name, price, slug } = req.body;
+    const { name, price, slug, initialStock } = req.body;
     try {
-      const createProduct = await createProductService({ name, price, slug });
+      const createProduct = await createProductService({
+        name,
+        price,
+        slug,
+        initialStock,
+      });
+
+      await publishEvent("product.events", "ProductCreated", createProduct);
+
       res.status(STATUS_CODES.CREATED).json({
         success: true,
         message: "Product created successfully",
@@ -66,7 +75,7 @@ export const getAllProductsController = expressAsyncHandler(
 export const updateProductController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const id = Number(req.params.id);
-    const { name, price, slug } = req.body;
+    const { name, price, slug, initialStock } = req.body;
     try {
       const updateProduct = await updateProductService({
         name,
@@ -74,6 +83,8 @@ export const updateProductController = expressAsyncHandler(
         slug,
         id,
       });
+      await publishEvent("product.events", "ProductUpdated", updateProduct);
+
       res.status(STATUS_CODES.CREATED).json({
         success: true,
         message: "Product updated successfully",
