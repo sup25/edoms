@@ -3,7 +3,7 @@ import amqp from "amqplib";
 export async function publishEvent(
   exchange: string,
   action: string,
-  product: any // This is the Sequelize model
+  product: any
 ): Promise<void> {
   try {
     // Convert the Sequelize instance to a plain object
@@ -14,11 +14,7 @@ export async function publishEvent(
       action,
       product: {
         id: productData.id,
-        name: productData.name,
-        price: productData.price,
-        slug: productData.slug,
-        createdAt: productData.createdAt,
-        updatedAt: productData.updatedAt,
+        initialStock: productData.initialStock,
       },
     };
 
