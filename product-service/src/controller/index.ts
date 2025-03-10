@@ -9,16 +9,19 @@ import {
 } from "../service";
 import { STATUS_CODES } from "../constants";
 import { publishEvent } from "../rabbitmq/publisher";
+import redis from "../utils/redis";
+import axios from "axios";
+const INVENTORY_SERVICE_URL =
+  process.env.INVENTORY_SERVICE_URL || "http://localhost:5002/api/v1";
 
 export const createProductController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {
-    const { name, price, slug, initialStock } = req.body;
+    const { name, price, slug } = req.body;
     try {
       const createProduct = await createProductService({
         name,
         price,
         slug,
-        initialStock,
       });
 
       await publishEvent("product.events", "ProductCreated", createProduct);
@@ -56,6 +59,70 @@ export const getAllProductsController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const products = await getAllProductsService();
+      const productsWithStock = await Promise.all(
+        products.map(async (product) => {
+          const productId = product.id.toString();
+          let stock: string | null = await redis.get(`stock:${productId}`);
+
+          if (!stock) {
+            try {
+              //  Fetch stock from Inventory Service if not in Redis
+              const stockResponse = await axios.get(
+                `${INVENTORY_SERVICE_URL}/stock/${productId}`
+              );
+              stock = stockResponse.data.data?.toString() || "0"; // Convert to string for Redis
+
+              //  Store stock in Redis with expiration time (e.g., 5 min)
+              await redis.setex(`stock:${productId}`, 300, stock!);
+
+              console.log(
+                `🟢 Stock fetched from Inventory Service for product ${productId}: ${stock}`
+              );
+            } catch (error) {
+              // Handle axios or inventory service error
+              console.error(
+                `❌ Error fetching stock for product ${productId}:`,
+                error instanceof Error ? error.message : String(error)
+              );
+              stock = "0"; // Fallback to "0" as a string since Redis expects strings
+            }
+          } else {
+            console.log(
+              `🔵 Stock fetched from Redis for product ${productId}: ${stock}`
+            );
+          }
+
+          // Convert stock to number, default to 0 if stock is null
+          const stockValue = stock !== null ? parseInt(stock, 10) : 0;
+
+          // Return product data with stock
+          return {
+            ...product.toJSON(),
+            stock: stockValue,
+          };
+        })
+      );
+
+      res.status(STATUS_CODES.OK).json({
+        success: true,
+        message: "Products fetched successfully",
+        data: productsWithStock,
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(STATUS_CODES.INTERNAL_SERVER_ERROR).json({
+        success: false,
+        message: "Internal server error",
+        data: null,
+      });
+    }
+  }
+);
+
+/* export const getAllProductsController = expressAsyncHandler(
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const products = await getAllProductsService();
       res.status(STATUS_CODES.OK).json({
         success: true,
         message: "Products fetched successfully",
@@ -70,7 +137,7 @@ export const getAllProductsController = expressAsyncHandler(
       });
     }
   }
-);
+); */
 
 export const updateProductController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {

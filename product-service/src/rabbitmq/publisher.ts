@@ -14,7 +14,7 @@ export async function publishEvent(
       action,
       product: {
         id: productData.id,
-        initialStock: productData.initialStock,
+        initialStock: 0,
       },
     };
 

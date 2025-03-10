@@ -18,7 +18,6 @@ class Product
   public name!: string;
   public price!: number;
   public slug!: string;
-  public initialStock!: number;
 }
 
 Product.init(
@@ -41,10 +40,6 @@ Product.init(
       type: DataTypes.STRING,
       allowNull: false,
       unique: true,
-    },
-    initialStock: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
     },
   },
   {

@@ -1,14 +1,14 @@
 import expressAsyncHandler from "express-async-handler";
 import { Request, Response } from "express";
 import { STATUS_CODES } from "../constants";
-import { getProductStock, updateProductStockService } from "../service";
+import { getProductStockById, updateProductStockService } from "../service";
 import { publishEvent } from "../rabbitmq/publisher";
 
 export const getProductStockController = expressAsyncHandler(
   async (req: Request, res: Response) => {
     const productId = Number(req.params.id);
     try {
-      const productStock = await getProductStock(productId);
+      const productStock = await getProductStockById(productId);
       res.status(STATUS_CODES.OK).json({
         success: true,
         message: "product Stock fetched successfully",

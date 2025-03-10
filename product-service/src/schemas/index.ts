@@ -4,7 +4,6 @@ export const CreateProductSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters long"),
   price: z.number().min(1, "Price must be at least 1"),
   slug: z.string().min(6, "Slug must be at least 6 characters long"),
-  initialStock: z.number().min(1, "Initial stock must be at least 1"),
 });
 export const UpdateProductBodySchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters long"),

@@ -11,7 +11,6 @@ import { updateProductStocksSchema } from "../schemas/updateProductStock.schema"
 const router = express.Router();
 router.get(
   "/stock/:id",
-  requireAdmin,
   validate(undefined, getProductStocksSchema),
   getProductStockController
 );

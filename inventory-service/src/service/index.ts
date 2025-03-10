@@ -1,7 +1,9 @@
 import Stock from "../model/inventory.model";
 import { TupdateProductStocks } from "../types";
 
-export const getProductStock = async (productId: number): Promise<number> => {
+export const getProductStockById = async (
+  productId: number
+): Promise<number> => {
   const stock = await Stock.findByPk(productId);
 
   if (!stock) {
