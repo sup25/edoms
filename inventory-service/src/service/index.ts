@@ -5,11 +5,9 @@ export const getProductStockById = async (
   productId: number
 ): Promise<number> => {
   const stock = await Stock.findByPk(productId);
-
   if (!stock) {
     throw new Error(`Stock not found for productId: ${productId}`);
   }
-
   return stock.stock;
 };
 
@@ -17,15 +15,17 @@ export const updateProductStockService = async ({
   id,
   stock,
 }: TupdateProductStocks): Promise<Stock> => {
-  const initailStock = await Stock.findByPk(id);
-  if (!initailStock) {
-    throw new Error(`Stock not found for productId: ${id}`);
-  }
-  if (stock < 0) {
-    throw new Error("Stock cannot be negative");
+  let existingStock = await Stock.findByPk(id);
+
+  if (!existingStock) {
+    existingStock = await Stock.create({ productId: id, stock });
+  } else {
+    if (stock < 0) {
+      throw new Error("Stock cannot be negative");
+    }
+    existingStock.stock = stock;
+    await existingStock.save();
   }
 
-  initailStock.stock = stock;
-  await initailStock.save();
-  return initailStock;
+  return existingStock;
 };

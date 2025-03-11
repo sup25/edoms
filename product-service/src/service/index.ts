@@ -14,9 +14,15 @@ export const createProductService = async ({
   return product;
 };
 
-export const getAllProductsService = async () => {
-  const products = await Product.findAll();
-  return products;
+export const getAllProductsService = async (page: number, limit: number) => {
+  const offset = (page - 1) * limit; // Calculate offset
+
+  const { count, rows: products } = await Product.findAndCountAll({
+    offset,
+    limit,
+  });
+
+  return { products, totalProducts: count };
 };
 
 export const updateProductService = async ({
