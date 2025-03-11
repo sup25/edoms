@@ -11,8 +11,8 @@ import { STATUS_CODES } from "../constants";
 import { publishEvent } from "../rabbitmq/publisher";
 import redis from "../utils/redis";
 import axios from "axios";
-const INVENTORY_SERVICE_URL =
-  process.env.INVENTORY_SERVICE_URL || "http://localhost:5002/api/v1";
+
+const INVENTORY_SERVICE_URL = process.env.INVENTORY_SERVICE_URL;
 
 export const createProductController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {
@@ -57,8 +57,13 @@ export const createProductController = expressAsyncHandler(
 
 export const getAllProductsController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 10;
     try {
-      const products = await getAllProductsService();
+      const { products, totalProducts } = await getAllProductsService(
+        page,
+        limit
+      );
       const productsWithStock = await Promise.all(
         products.map(async (product) => {
           const productId = product.id.toString();
@@ -107,6 +112,11 @@ export const getAllProductsController = expressAsyncHandler(
         success: true,
         message: "Products fetched successfully",
         data: productsWithStock,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(totalProducts / limit),
+          totalProducts,
+        },
       });
     } catch (error) {
       console.error(error);
@@ -119,30 +129,10 @@ export const getAllProductsController = expressAsyncHandler(
   }
 );
 
-/* export const getAllProductsController = expressAsyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const products = await getAllProductsService();
-      res.status(STATUS_CODES.OK).json({
-        success: true,
-        message: "Products fetched successfully",
-        data: products,
-      });
-    } catch (error) {
-      console.error(error);
-      res.status(STATUS_CODES.INTERNAL_SERVER_ERROR).json({
-        success: false,
-        message: "Internal server error",
-        data: null,
-      });
-    }
-  }
-); */
-
 export const updateProductController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const id = Number(req.params.id);
-    const { name, price, slug, initialStock } = req.body;
+    const { name, price, slug } = req.body;
     try {
       const updateProduct = await updateProductService({
         name,
