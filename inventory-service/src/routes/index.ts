@@ -1,5 +1,6 @@
 import express from "express";
 import {
+  getAllStockController,
   getProductStockController,
   updateProductStockController,
 } from "../controller";
@@ -14,6 +15,8 @@ router.get(
   validate(undefined, getProductStocksSchema),
   getProductStockController
 );
+
+router.get("/stocks", getAllStockController);
 
 router.post(
   "/stock",

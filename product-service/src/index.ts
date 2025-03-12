@@ -3,6 +3,7 @@ import express from "express";
 import Product from "./model/product.model";
 import router from "./routes";
 import { subscribeToEvent } from "./rabbitmq/subscriber";
+import { subscribeToStockDecrementEvent } from "./handler/handleStockDecrement";
 
 const app = express();
 (async () => {
@@ -18,10 +19,10 @@ const app = express();
 })();
 
 async function startService() {
-  await subscribeToEvent("StockUpdated", (data) => {});
+  await subscribeToEvent("StockUpdated", (data) => {}, "inventory_exchange");
 }
-
 startService();
+subscribeToStockDecrementEvent();
 
 app.use(express.json());
 app.use("/api/v1", router);

@@ -11,6 +11,19 @@ export const getProductStockById = async (
   return stock.stock;
 };
 
+export const getAllStockWithProductId = async (): Promise<
+  { productId: number; stock: number }[]
+> => {
+  const stockRecords = await Stock.findAll({
+    attributes: ["productId", "stock"],
+  });
+
+  return stockRecords.map((record) => ({
+    productId: record.productId,
+    stock: record.stock,
+  }));
+};
+
 export const updateProductStockService = async ({
   id,
   stock,

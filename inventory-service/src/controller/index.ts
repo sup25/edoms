@@ -1,7 +1,11 @@
 import expressAsyncHandler from "express-async-handler";
 import { Request, Response } from "express";
 import { STATUS_CODES } from "../constants";
-import { getProductStockById, updateProductStockService } from "../service";
+import {
+  getAllStockWithProductId,
+  getProductStockById,
+  updateProductStockService,
+} from "../service";
 import { publishEvent } from "../rabbitmq/publisher";
 
 export const getProductStockController = expressAsyncHandler(
@@ -26,6 +30,26 @@ export const getProductStockController = expressAsyncHandler(
           return;
         }
       }
+      res.status(STATUS_CODES.INTERNAL_SERVER_ERROR).json({
+        success: false,
+        message: "Error fetching product Stock",
+        error: error,
+      });
+    }
+  }
+);
+export const getAllStockController = expressAsyncHandler(
+  async (req: Request, res: Response) => {
+    try {
+      const allStock = await getAllStockWithProductId();
+      res.status(STATUS_CODES.OK).json({
+        success: true,
+        message: "product Stock fetched successfully",
+        data: allStock,
+      });
+    } catch (error) {
+      console.log(error);
+
       res.status(STATUS_CODES.INTERNAL_SERVER_ERROR).json({
         success: false,
         message: "Error fetching product Stock",

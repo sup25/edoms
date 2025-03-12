@@ -1,8 +1,9 @@
 import express from "express";
-import { subscribeToProductEvents } from "./rabbitmq/subscriber";
+import { subscribeToEvents } from "./rabbitmq/subscriber";
 import connectdb from "./config/db";
 import Stock from "./model/inventory.model";
 import router from "./routes";
+import OrderReservation from "./model/orderReservation.model";
 
 const app = express();
 
@@ -12,14 +13,16 @@ const app = express();
     console.log("Connection successful");
     await Stock.sync({ alter: true });
     console.log("Stocks table synced");
+    await OrderReservation.sync({ alter: true });
+    console.log("OrderReservation table synced");
   } catch (error) {
     console.error("Error:", error);
     process.exit(1);
   }
 })();
 async function startService() {
-  await subscribeToProductEvents();
-  console.log("Inventory service started");
+  await subscribeToEvents();
+  console.log(" service started");
 }
 
 startService();
