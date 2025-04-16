@@ -1,5 +1,7 @@
 # EDOMS - Event-Driven Order Management System
 
+![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+
 EDOMS is a microservices-based order management system built with Node.js and TypeScript. The system is designed to handle various aspects of order management operations including user authentication, product management, inventory tracking, order processing, and payment handling.
 
 ## Project Structure
@@ -51,11 +53,11 @@ cd ../product-service && npm install
 
 ## Service Ports
 
-- Auth Service: 3001
-- Inventory Service: 3002
-- Order Service: 3003
-- Payment Service: 3004
-- Product Service: 3005
+- Auth Service: 5000
+- Product Service: 5001
+- Inventory Service: 5002
+- Order Service: 5003
+- Payment Service: 5004
 
 ## API Documentation
 
@@ -75,7 +77,7 @@ The system follows a microservices architecture where each service:
 
 - Has its own database
 - Communicates through REST APIs and RabbitMQ for event-driven operations
-- Uses Redis for caching and session management
+- Uses Redis for caching
 - Can be deployed independently
 - Has its own business logic and domain
 
@@ -85,7 +87,7 @@ The system follows a microservices architecture where each service:
 - Role-based access control
 - Secure password hashing
 - API rate limiting
-- Input validation and sanitization
+- Input validation and _(sanitization coming soon)_
 
 ## Support
 
