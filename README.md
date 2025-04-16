@@ -4,23 +4,27 @@
 
 EDOMS is a microservices-based order management system built with Node.js and TypeScript. The system is designed to handle various aspects of order management operations including user authentication, product management, inventory tracking, order processing, and payment handling.
 
+---
+
 ## Project Structure
 
 The project consists of the following microservices:
 
 - **Auth Service**: Handles user authentication and authorization
+- **Product Service**: Manages product catalog and information
 - **Inventory Service**: Manages product inventory and stock levels
 - **Order Service**: Processes and manages customer orders
 - **Payment Service**: Handles payment processing and transactions
-- **Product Service**: Manages product catalog and information
+
+---
 
 ## Prerequisites
 
-- Node.js (v14 or higher)
+- Node.js (v18 or higher)
 - npm or yarn
-- MongoDB (for data storage)
+- PostgreSQL(for data storage)
 - RabbitMQ (for message queuing and event-driven communication)
-- Redis (for caching and session management)
+- Redis (for caching)
 
 ## Getting Started
 
