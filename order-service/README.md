@@ -36,14 +36,14 @@ DB_USER=your_username
 DB_PASSWORD=your_password
 
 # Redis Configuration
-REDIS_URL=redis://localhost:6379
+REDIS_URL=redis://localhost:6379 || or your-custom-redis-url.com
 
 # RabbitMQ Configuration
 RABBITMQ_URL=amqp://localhost:5672
 
 # Service URLs
-PRODUCT_SERVICE_URL=http://localhost:3001
-STOCK_SERVICE_URL=http://localhost:3002
+PRODUCT_SERVICE_URL=http://localhost:3001 || or https://your-custom-product-service.com
+STOCK_SERVICE_URL=http://localhost:3002 || or https://your-custom-stock-service.com
 ```
 
 ## Installation
@@ -217,8 +217,4 @@ npm test -- src/**tests**/createOrder.test.ts
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+For contributing, please refer to the [main repository contribution guide](../README.md#contributing).
