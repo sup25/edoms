@@ -1,0 +1,47 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# TypeScript
+dist/
+*.tsbuildinfo
+
+# Environment Variables
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Docker
+Dockerfile.local
+docker-compose.override.yml
+*.log
+
+# PostgreSQL Local Data
+pgdata/
+data/
+
+# Editor/IDE Files
+.vscode/
+.idea/
+*.sublime-*
+
+# Windows-Specific Files
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# Logs
+logs/
+*.log
+
+# Testing
+coverage/
+jest-cache/
+
+# Miscellaneous
+*.bak
+*.swp

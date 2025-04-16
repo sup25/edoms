@@ -1,0 +1,30 @@
+# Node modules
+node_modules/
+
+# TypeScript output
+dist/
+
+# Log files
+logs/
+
+# Dependency directories
+jspm_packages/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+
+# npm debug file
+npm-debug.log*
+
+# TypeScript build artifacts
+*.tsbuildinfo
+
+# Yarn
+.yarn/
+
+# VS Code settings
+.vscode/
