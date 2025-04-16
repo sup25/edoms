@@ -45,13 +45,13 @@ npm install
 3. Set up environment variables: Create a .env file in the root directory with the following variables:
 
 ```bash
-PORT=5000
+PORT=5000 || your_desired_port
 DB_HOST=your_host_name
-DB_PORT=your_port_name
+DB_PORT=your_db_port
 DB_USERNAME=your_db_user_name
 DB_PASSWORD=your_password
 DB_NAME=your_db_name
-JWT_SECRET=your_jwt_secret surgekey
+JWT_SECRET=your_jwt_secret
 ```
 
 4. Create the PostgreSQL database:
