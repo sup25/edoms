@@ -4,8 +4,6 @@
 
 EDOMS is a microservices-based order management system built with Node.js and TypeScript. The system is designed to handle various aspects of order management operations including user authentication, product management, inventory tracking, order processing, and payment handling.
 
----
-
 ## Project Structure
 
 The project consists of the following microservices:
@@ -16,15 +14,26 @@ The project consists of the following microservices:
 - **Order Service**: Processes and manages customer orders
 - **Payment Service**: Handles payment processing and transactions
 
----
-
 ## Prerequisites
 
 - Node.js (v18 or higher)
 - npm or yarn
-- PostgreSQL(for data storage)
+- PostgreSQL (for data storage)
 - RabbitMQ (for message queuing and event-driven communication)
 - Redis (for caching)
+
+## Why PostgreSQL?
+
+For EDOMS, I needed a database that supports strong consistency, transactional integrity, and can scale with microservices. After evaluating several options like MySQL, MongoDB, and PostgreSQL, I decided to go with **PostgreSQL** because of its:
+
+- Excellent support for ACID transactions (crucial for order and payment consistency)
+- Strong community and ecosystem
+- Flexibility with JSON and relational data
+- Great tooling support in the Node.js/TypeScript ecosystem
+
+I also created a small project to help compare these databases based on real use-case factors like scalability, data model needs, and transaction guarantees.
+
+👉 [See the comparison here](https://github.com/sup25/dbchooser)
 
 ## Getting Started
 
