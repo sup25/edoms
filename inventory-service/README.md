@@ -34,12 +34,13 @@ The Inventory Service is a microservice designed to manage product stock levels 
 Create a `.env` file in the root directory with the following variables:
 
 ```env
-DB_HOST=localhost
-DB_PORT=5432
-DB_USERNAME=postgres
+PORT=your_desired_port
+DB_HOST=your_host_name
+DB_PORT=your_db_port
+DB_USERNAME=your_db_user_name
 DB_PASSWORD=your_password
-DB_NAME=inventory_service
-JWT_SECRET=your_secret
+DB_NAME=your_db_name
+JWT_SECRET=your_jwt_secret
 ```
 
 ## Installation
@@ -283,8 +284,4 @@ The service includes comprehensive error handling for:
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+For contributing, please refer to the [main repository contribution guide](../README.md#contributing).
