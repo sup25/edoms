@@ -1,5 +1,6 @@
 import Order from "../model/order.model";
 import { EventType } from "@edoms/shared-events";
+import { IN_FLIGHT_STATUSES } from "../model/order.model";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
 
@@ -37,10 +38,8 @@ export async function handleReservationFailedEvent(
   }
 
   // Idempotent by state: a redelivery finds the order already failed.
-  if (order.status !== "pending") {
-    logger.warn(
-      `Order ${orderId} is '${order.status}', not marking failed again`
-    );
+  if (!IN_FLIGHT_STATUSES.includes(order.status)) {
+    logger.warn(`Order ${orderId} is '${order.status}', not marking failed again`);
     return;
   }
 

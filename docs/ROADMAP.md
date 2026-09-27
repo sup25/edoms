@@ -101,7 +101,10 @@ anywhere in the process is picked up by the relay, published, and reaches its co
 - [x] Route every existing `publishEvent` call through the outbox.
 - [ ] Optional later: swap polling for logical replication / Debezium. Still polling.
 
-## Phase 5 - Close the gap between the two chains
+## Phase 5 - Close the gap between the two chains (DONE)
+
+Verified live: an order now goes from POST to `confirmed` with NO payment request,
+under ONE correlationId end to end. `npm run smoke` asserts it.
 
 This is the phase that answers the original question. Everything above is groundwork.
 
@@ -109,25 +112,25 @@ Scope note: the existing choreography is kept as-is. The work here is removing t
 synchronous entry points and joining `stock.reserved` to payment, not rewriting the
 handlers that already react correctly.
 
-- [ ] **Remove synchronous HTTP from the write path.** `order-service` should not call
+- [x] **Remove synchronous HTTP from the write path.** `order-service` should not call
       product-service and inventory-service before accepting an order. It validates the
       request, writes `order (status=pending)`, emits `order.created`, and returns
       `202 Accepted` with the order id.
-- [ ] **Inventory reacts** to `order.created` and emits `inventory.stock.reserved` or
+- [x] **Inventory reacts** to `order.created` and emits `inventory.stock.reserved` or
       `inventory.reservation.failed`.
-- [ ] **Payment reacts** to `inventory.stock.reserved` instead of waiting for a second
+- [x] **Payment reacts** to `inventory.stock.reserved` instead of waiting for a second
       HTTP call from the client. This is the single biggest change: today the client is
       the orchestrator.
-- [ ] **Order saga / state machine** owns the lifecycle:
+- [x] **Order saga / state machine** owns the lifecycle:
       `pending -> reserved -> paid -> confirmed`, with `failed` and `cancelled` branches
       and a compensating action per step.
-- [ ] **Saga timeouts.** If `inventory.stock.reserved` never arrives, expire the order and
+- [x] **Saga timeouts.** If `inventory.stock.reserved` never arrives, expire the order and
       compensate. Nothing should be able to sit in `pending` indefinitely.
-- [ ] **Denormalise event payloads.** Carry price, name, and quantity on the event so
+- [x] **Denormalise event payloads.** Carry price, name, and quantity on the event so
       consumers stop HTTP-GETing the producer after receiving it (the current
       `handleStockDecrementEvent` pattern).
-- [ ] **Client reads the result** by polling `GET /order/:id/status` or over SSE/WebSocket,
-      since order creation is now asynchronous.
+- [x] **Client reads the result** by polling `GET /orderStatus/:id`; the 202 response
+      carries a `statusUrl`. SSE/WebSocket push is still open.
 
 ## Phase 6 - Observability
 

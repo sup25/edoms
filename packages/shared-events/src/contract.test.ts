@@ -114,9 +114,40 @@ describe("parseEnvelope", () => {
 describe("validatePayload", () => {
   it("accepts a well-formed payload", () => {
     const ok = validatePayload(EventType.ORDER_CREATED, {
-      orderId: 1, items: [{ productId: 2, quantity: 3 }],
+      orderId: 1, items: [{ productId: 2, quantity: 3, price: "19.99" }],
     });
     expect(ok).toMatchObject({ orderId: 1 });
+  });
+
+  it("requires a price on order.created items", () => {
+    // Payment charges from the price on the event. A missing one used to
+    // default to 0 downstream, which Stripe rejects as below the minimum
+    // charge - failing the order for a reason unrelated to the customer.
+    expect(() =>
+      validatePayload(EventType.ORDER_CREATED, {
+        orderId: 1, items: [{ productId: 2, quantity: 3 }],
+      })
+    ).toThrow(EventContractError);
+
+    expect(() =>
+      validatePayload(EventType.ORDER_CREATED, {
+        orderId: 1, items: [{ productId: 2, quantity: 3, price: 0 }],
+      })
+    ).toThrow(EventContractError);
+  });
+
+  it("carries everything payment needs on inventory.order.reserved", () => {
+    expect(() =>
+      validatePayload(EventType.ORDER_RESERVED, {
+        orderId: 1,
+        items: [{ productId: 2, quantity: 3, price: "19.99" }],
+      })
+    ).not.toThrow();
+
+    // no items means nothing to charge for
+    expect(() =>
+      validatePayload(EventType.ORDER_RESERVED, { orderId: 1, items: [] })
+    ).toThrow(EventContractError);
   });
 
   it("requires orderId on reservation.released (the defect #17 guard)", () => {
@@ -140,7 +171,9 @@ describe("validatePayload", () => {
 
   it("rejects a non-positive quantity", () => {
     expect(() =>
-      validatePayload(EventType.ORDER_CREATED, { orderId: 1, items: [{ productId: 1, quantity: 0 }] })
+      validatePayload(EventType.ORDER_CREATED, {
+        orderId: 1, items: [{ productId: 1, quantity: 0, price: "1.00" }],
+      })
     ).toThrow(EventContractError);
   });
 

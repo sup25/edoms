@@ -1,5 +1,4 @@
 import expressAsyncHandler from "express-async-handler";
-import axios from "axios";
 import { Request, Response } from "express";
 import { STATUS_CODES } from "../constants";
 import {
@@ -11,9 +10,8 @@ import { randomUUID } from "crypto";
 import { EventType } from "@edoms/shared-events";
 import sequelize from "../config/db";
 import { publishToOutbox } from "../rabbitmq/outbox";
-import { PRODUCT_SERVICE_URL, STOCK_SERVICE_URL } from "../config/apiEndpoints";
 import logger from "../utils/logger";
-import redis from "../utils/redis";
+import ProductProjection from "../model/productProjection.model";
 
 interface OrderItem {
   productId: number;
@@ -44,132 +42,58 @@ export const createOrderController = expressAsyncHandler(
       return;
     }
 
-    // Step 1: Fetch products by their IDs
-    const products: any[] = [];
-    const productIds = items.map((item: OrderItem) => item.productId);
-
-    for (const productId of productIds) {
-      // Check Redis cache first
-      const cachedProduct = await redis.get(`product:${productId}`);
-      if (cachedProduct) {
-        products.push(JSON.parse(cachedProduct));
-      } else {
-        try {
-          const productResponse = await axios.get(
-            `${PRODUCT_SERVICE_URL}/api/v1/product/${productId}`
-          );
-
-          if (!productResponse.data?.success) {
-            res.status(STATUS_CODES.NOT_FOUND).json({
-              success: false,
-              message: `Product with ID ${productId} not found`,
-            });
-            return;
-          }
-
-          const product = productResponse.data?.data;
-          products.push(product);
-
-          // Cache the product in Redis (expires in 10 minutes)
-          await redis.set(
-            `product:${productId}`,
-            JSON.stringify(product),
-            "EX",
-            600
-          );
-        } catch (error) {
-          logger.error(`Error fetching product ${productId}:`, error);
-          res.status(STATUS_CODES.INTERNAL_SERVER_ERROR).json({
-            success: false,
-            message: `Error fetching product ${productId}`,
-            data: null,
-          });
-          return;
-        }
-      }
-    }
-
-    // Step 2: Fetch stock details for the required products
-    let stockData: any[] = [];
-    try {
-      // Ideally, modify the stock service to accept a list of productIds
-      const stockResponse = await axios.get(
-        `${STOCK_SERVICE_URL}/api/v1/stocks?productIds=${productIds.join(",")}`
-      );
-
-      if (!stockResponse.data?.success) {
-        res.status(STATUS_CODES.BAD_REQUEST).json({
-          success: false,
-          message: "Failed to fetch stock data",
-          data: null,
-        });
-        return;
-      }
-
-      stockData = stockResponse.data.data || [];
-    } catch (error) {
-      logger.error("Error fetching stock details:", error);
-      res.status(STATUS_CODES.INTERNAL_SERVER_ERROR).json({
-        success: false,
-        message: "Error fetching stock details",
-        data: null,
-      });
-      return;
-    }
-
+    /*
+     * Look the products up LOCALLY.
+     *
+     * This used to be one HTTP call to product-service per item, plus a bulk
+     * call to inventory-service to pre-check stock. Both sat on the write
+     * path, so no order could be accepted while either service was down.
+     *
+     * Prices now come from a local projection kept current by
+     * product.created / product.updated / product.deleted.
+     */
     const orderItems: any[] = [];
 
     for (const item of items) {
-      const product = products.find((p: any) => p.id === item.productId);
-      const stock = stockData.find((s: any) => s.productId === item.productId);
+      if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
+        res.status(STATUS_CODES.BAD_REQUEST).json({
+          success: false,
+          message: `Invalid quantity for product ${item.productId}`,
+          data: null,
+        });
+        return;
+      }
 
-      // Validate product existence
+      const product = await ProductProjection.findByPk(item.productId);
+
       if (!product) {
+        // Either the product does not exist, or its creation event has not
+        // been projected yet. Both are a client-visible 404 here.
         res.status(STATUS_CODES.NOT_FOUND).json({
           success: false,
           message: `Product with ID ${item.productId} not found`,
-        });
-        return;
-      }
-
-      // Validate stock existence
-      if (!stock) {
-        res.status(STATUS_CODES.BAD_REQUEST).json({
-          success: false,
-          message: `Stock information not found for product ${product.name}`,
           data: null,
         });
         return;
       }
 
-      // Validate stock availability
-      if (stock.stock < item.quantity) {
-        res.status(STATUS_CODES.BAD_REQUEST).json({
-          success: false,
-          message: `Insufficient stock for product ${product.name}`,
-          data: null,
-        });
-        return;
-      }
-
-      // Validate quantity
-      if (item.quantity <= 0) {
-        res.status(STATUS_CODES.BAD_REQUEST).json({
-          success: false,
-          message: `Invalid quantity for product ${product.name}`,
-          data: null,
-        });
-        return;
-      }
-
-      // Add validated item to orderItems
       orderItems.push({
-        productId: product.id,
+        productId: product.productId,
         quantity: item.quantity,
         name: product.name,
         price: product.price,
       });
     }
+
+    /*
+     * Stock is deliberately NOT checked here.
+     *
+     * inventory-service decides, with a conditional
+     * `UPDATE ... WHERE stock >= :qty` that cannot oversell (Phase 3). If it
+     * cannot satisfy the order it publishes inventory.reservation.failed and
+     * the order is marked failed. Checking here as well would be a second,
+     * racy opinion: stock can change between the check and the reservation.
+     */
 
     // Step 4: Create the order using the service
     try {
@@ -209,11 +133,15 @@ export const createOrderController = expressAsyncHandler(
         return created;
       });
 
-      // Step 6: Send success response
-      res.status(STATUS_CODES.CREATED).json({
+      /*
+       * 202, not 201. The order has been accepted, not completed: stock is
+       * not yet reserved and payment has not run. The client polls
+       * GET /orderStatus/:id, or watches for the status to settle.
+       */
+      res.status(STATUS_CODES.ACCEPTED).json({
         success: true,
-        message: "Order created successfully",
-        data: result.order,
+        message: "Order accepted and is being processed",
+        data: { ...result.order, statusUrl: `/api/v1/orderStatus/${result.order.id}` },
       });
     } catch (error) {
       logger.error("Error creating order:", error);

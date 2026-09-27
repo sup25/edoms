@@ -23,7 +23,7 @@ describe("GET /order/:id", () => {
   it("should return order details if the order exists", async () => {
     const mockOrder = {
       items: [{ id: 1, name: "Product A", quantity: 2 }],
-      status: "completed",
+      status: "confirmed" as const,
     };
 
     mockedService.getOrderDetailsByIdService.mockResolvedValue(mockOrder);

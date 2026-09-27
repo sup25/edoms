@@ -59,11 +59,12 @@ const CONSUMERS = {
   "product.deleted": "-> inventory deletes stock, order drops its cache",
   "order.created": "-> inventory reserves stock",
   "inventory.stock.reserved": "-> product refreshes Redis cache",
+  "inventory.order.reserved": "-> PAYMENT CHARGES THE ORDER, order marks RESERVED",
   "inventory.stock.updated": "-> product invalidates its stock cache",
   "inventory.reservation.confirmed": "-> order marks CONFIRMED",
   "inventory.reservation.released": "-> order marks FAILED, product rolls back cache",
   "inventory.reservation.failed": "-> order marks FAILED (insufficient stock)",
-  "payment.succeeded": "-> inventory confirms reservation",
+  "payment.succeeded": "-> inventory confirms reservation, order marks PAID",
   "payment.failed": "-> inventory releases stock",
 };
 
