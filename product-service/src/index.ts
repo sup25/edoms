@@ -7,6 +7,7 @@ import { subscribeEvent } from "./rabbitmq/subscriber";
 import { startStockDecrementEventService } from "./handler/handleStockDecrementEvent";
 import { startStockRollBackEventService } from "./handler/handleStockRollBackEvent";
 import logger from "./utils/logger";
+import { closeBroker } from "./rabbitmq/connection";
 
 const app = express();
 (async () => {
@@ -21,7 +22,11 @@ const app = express();
   }
 })();
 
-/* Subscribe to StockUpdated event, only for listening */
+/*
+ * Subscribe to stock_updated. This currently only logs.
+ * TODO (Phase 2, docs/ROADMAP.md): an admin stock update leaves the Redis
+ * `stock:<id>` cache in this service stale. This handler should invalidate it.
+ */
 async function startService() {
   await subscribeEvent(
     "inventory_service",
@@ -29,7 +34,8 @@ async function startService() {
     "direct",
     async (eventType: string, data: any) => {
       logger.info(`Received event: ${eventType}`, data);
-    }
+    },
+    { queue: "product-service.stock-updated" }
   );
 }
 
@@ -52,5 +58,21 @@ if (process.env.NODE_ENV !== "test") {
     console.error("Error starting server:", error);
   }
 }
+
+/* Graceful shutdown: stop taking new work, drain in-flight messages. */
+async function shutdown(signal: string) {
+  logger.info(`${signal} received, shutting down`);
+  try {
+    await closeBroker();
+    await connectdb.close();
+  } catch (error) {
+    logger.error("Error during shutdown", error);
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
 
 export { app };

@@ -1,0 +1,22 @@
+{
+  "name": "edoms",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Event-Driven Order Management System",
+  "scripts": {
+    "preflight": "node scripts/preflight.js",
+    "dev": "node scripts/dev.js",
+    "trace": "node scripts/trace-events.js",
+    "trace:payloads": "node scripts/trace-events.js --payloads",
+    "smoke": "node scripts/smoke-test.js",
+    "smoke:fail": "node scripts/smoke-test.js --fail",
+    "smoke:oversell": "node scripts/smoke-test.js --oversell",
+    "smoke:duplicate": "node scripts/smoke-test.js --duplicate",
+    "smoke:all": "npm run smoke && npm run smoke:fail && npm run smoke:oversell && npm run smoke:duplicate",
+    "verify:messaging": "node scripts/verify-messaging.js",
+    "clean:broker": "node scripts/clean-broker.js",
+    "install:all": "npm --prefix auth-service install && npm --prefix product-service install && npm --prefix inventory-service install && npm --prefix order-service install && npm --prefix payment-service install",
+    "build:all": "npm --prefix auth-service run build && npm --prefix product-service run build && npm --prefix inventory-service run build && npm --prefix order-service run build && npm --prefix payment-service run build",
+    "test:all": "npm --prefix product-service test && npm --prefix inventory-service test && npm --prefix order-service test && npm --prefix payment-service test"
+  }
+}

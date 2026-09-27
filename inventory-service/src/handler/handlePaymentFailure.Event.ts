@@ -1,79 +1,117 @@
+import { QueryTypes } from "sequelize";
+import sequelize from "../config/db";
 import OrderReservation from "../model/orderReservation.model";
-import Stock from "../model/stock.model";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import { publishEvent } from "../rabbitmq/publisher";
+import { processOnce, EventMeta } from "../utils/idempotency";
 import logger from "../utils/logger";
 
 interface PaymentFailureEvent {
-  orderId: number;
+  orderId: number | string;
 }
 
+const CONSUMER = "inventory.payment-failure";
+
+/**
+ * Releases stock held by an order whose payment failed.
+ *
+ * Phase 3 changes:
+ * - the restore is an atomic `stock = stock + :qty` UPDATE rather than a
+ *   read-then-write, so concurrent rollbacks cannot lose an update
+ * - each reservation is only released if it is still `pending`. Without that
+ *   guard a duplicate payment_failure would credit the stock twice and invent
+ *   inventory that does not exist (defect #7)
+ * - wrapped in processOnce as a second layer of protection
+ */
 export async function handlePaymentFailureEvent(
   eventType: string,
-  event: PaymentFailureEvent
+  event: PaymentFailureEvent,
+  meta?: EventMeta
 ): Promise<void> {
-  try {
-    if (eventType === "payment_failure") {
-      const { orderId } = event;
+  if (eventType !== "payment_failure") {
+    logger.info(`Unhandled event type: ${eventType}`);
+    return;
+  }
 
-      // Find all reservations for the given orderId
-      const reservations = await OrderReservation.findAll({
-        where: { orderId },
-      });
+  const orderId = Number(event?.orderId);
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    logger.error(`payment_failure event with invalid orderId: ${event?.orderId}`);
+    return;
+  }
 
-      if (!reservations.length) {
-        logger.error(`No OrderReservations found for orderId: ${orderId}`);
-        return;
-      }
+  const released: { productId: number; quantity: number }[] = [];
 
-      // Release stock and update reservation status
-      for (const reservation of reservations) {
-        const { productId, reservedQuantity } = reservation;
+  await processOnce(CONSUMER, eventType, meta, async (transaction) => {
+    released.length = 0;
 
-        // Find the stock entry for this product
-        const stockItem = await Stock.findOne({
-          where: { productId },
-        });
+    const reservations = await OrderReservation.findAll({
+      where: { orderId },
+      transaction,
+    });
 
-        if (!stockItem) {
-          logger.error(`No stock found for productId: ${productId}`);
-          continue;
-        }
-
-        // Return the reserved quantity back to stock
-        await Stock.update(
-          {
-            stock: stockItem.stock + reservedQuantity,
-          },
-          { where: { productId } }
-        );
-
-        // Update reservation status to 'canceled'
-        await OrderReservation.update(
-          { status: "canceled" },
-          { where: { id: reservation.id } }
-        );
-
-        logger.info(
-          `Stock released (${reservedQuantity} units) for productId: ${productId}, orderId: ${orderId}`
-        );
-        await publishEvent(
-          "inventory_service",
-          "order_failed",
-          "order failed",
-          {
-            productId,
-            rolledBackQuantity: reservedQuantity,
-          }
-        );
-      }
-
-      logger.info(`Payment failure processed for orderId: ${orderId}`);
-    } else {
-      logger.info(`Unhandled event type: ${eventType}`);
+    if (!reservations.length) {
+      logger.error(`No OrderReservations found for orderId: ${orderId}`);
+      return;
     }
-  } catch (error) {
-    logger.error("Error handling payment failure event:", error);
+
+    for (const reservation of reservations) {
+      const { id, productId, reservedQuantity, status } = reservation;
+
+      /*
+       * Only a reservation that is still pending may be released. Flipping the
+       * status and checking the previous value in one statement means two
+       * concurrent rollbacks cannot both win: the second sees zero rows.
+       */
+      const claimed = await sequelize.query<{ id: number }>(
+        `UPDATE "order_reservations"
+            SET status = 'canceled', updated_at = NOW()
+          WHERE id = :id
+            AND status = 'pending'
+      RETURNING id`,
+        { replacements: { id }, type: QueryTypes.SELECT, transaction }
+      );
+
+      if (claimed.length === 0) {
+        logger.warn(
+          `Reservation ${id} for order ${orderId} is already '${status}', ` +
+            `not releasing stock again`
+        );
+        continue;
+      }
+
+      await sequelize.query(
+        `UPDATE "Stocks"
+            SET stock = stock + :quantity
+          WHERE "productId" = :productId`,
+        {
+          replacements: { quantity: reservedQuantity, productId },
+          type: QueryTypes.UPDATE,
+          transaction,
+        }
+      );
+
+      released.push({ productId, quantity: reservedQuantity });
+      logger.info(
+        `Released ${reservedQuantity} unit(s) of product ${productId} for order ${orderId}`
+      );
+    }
+  });
+
+  // Published after commit so consumers never see an event for work that was
+  // rolled back.
+  for (const item of released) {
+    await publishEvent("inventory_service", "order_failed", "order failed", {
+      orderId,
+      productId: item.productId,
+      rolledBackQuantity: item.quantity,
+      failedAt: new Date().toISOString(),
+    });
+  }
+
+  if (released.length === 0) {
+    logger.info(
+      `Payment failure for order ${orderId} released nothing (already handled)`
+    );
   }
 }
 
@@ -82,10 +120,11 @@ export async function startPaymentFailureEventService() {
     "payment_service",
     "payment_failure",
     "direct",
-    async (eventType: string, data: any) => {
+    async (eventType: string, data: any, meta) => {
       logger.info(`Received event: ${eventType}`, data);
-      await handlePaymentFailureEvent(eventType, data);
-    }
+      await handlePaymentFailureEvent(eventType, data, meta);
+    },
+    { queue: "inventory-service.payment-failure" }
   );
 
   logger.info("Inventory service started for payment failure event");

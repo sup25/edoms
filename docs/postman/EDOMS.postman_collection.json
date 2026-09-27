@@ -1,0 +1,633 @@
+{
+  "info": {
+    "name": "EDOMS",
+    "description": "Event-Driven Order Management System.\n\nRun the requests top to bottom. Each one captures what the next needs (tokens, productId, orderId) into collection variables, so you never copy-paste an id.\n\nKeep `npm run trace` open in a terminal while you click through - every request that fires an event is marked, and you will see it appear in the trace within milliseconds.\n\nPrerequisites: all five services running (`npm run dev`) and `node scripts/preflight.js` green.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "authUrl", "value": "http://localhost:5000/api/v1" },
+    { "key": "productUrl", "value": "http://localhost:5001/api/v1" },
+    { "key": "inventoryUrl", "value": "http://localhost:5002/api/v1" },
+    { "key": "orderUrl", "value": "http://localhost:5003/api/v1" },
+    { "key": "paymentUrl", "value": "http://localhost:5004/api/v1" },
+    { "key": "rabbitUrl", "value": "http://localhost:15672" },
+    { "key": "password", "value": "Password123!" },
+    { "key": "adminEmail", "value": "" },
+    { "key": "userEmail", "value": "" },
+    { "key": "adminToken", "value": "" },
+    { "key": "userToken", "value": "" },
+    { "key": "userId", "value": "" },
+    { "key": "productId", "value": "" },
+    { "key": "productSlug", "value": "" },
+    { "key": "orderId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1 - Auth",
+      "description": "Two identities. The admin creates products and sets stock. Ordering requires role `user` specifically - an admin token gets 403 on /createorder.",
+      "item": [
+        {
+          "name": "Register admin",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// unique email each run so you can re-run freely",
+                  "pm.collectionVariables.set('adminEmail', 'admin+' + Date.now() + '@example.com');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('admin created', () => pm.response.code === 201);",
+                  "console.log('admin =', pm.collectionVariables.get('adminEmail'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": { "raw": "{{authUrl}}/admins", "host": ["{{authUrl}}"], "path": ["admins"] },
+            "description": "Body is {email, password} ONLY - there is no name field. Password must be at least 8 characters.\n\nNo event fires here."
+          }
+        },
+        {
+          "name": "Login as admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.response.json()?.data?.accessToken;",
+                  "pm.test('got admin token', () => !!token);",
+                  "if (token) pm.collectionVariables.set('adminToken', token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": { "raw": "{{authUrl}}/auth/login", "host": ["{{authUrl}}"], "path": ["auth", "login"] },
+            "description": "Captures data.accessToken into {{adminToken}}.\n\nNote the token is short-lived (5 minutes). If later admin requests start returning 401, just re-run this one."
+          }
+        },
+        {
+          "name": "Register user",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.collectionVariables.set('userEmail', 'user+' + Date.now() + '@example.com');"]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('user created', () => pm.response.code === 201);"]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": { "raw": "{{authUrl}}/users", "host": ["{{authUrl}}"], "path": ["users"] },
+            "description": "A regular user (role 'user'). Orders can ONLY be placed with this role."
+          }
+        },
+        {
+          "name": "Login as user",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.response.json()?.data?.accessToken;",
+                  "pm.test('got user token', () => !!token);",
+                  "if (token) {",
+                  "  pm.collectionVariables.set('userToken', token);",
+                  "  try {",
+                  "    const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());",
+                  "    pm.collectionVariables.set('userId', Number(claims.userId));",
+                  "    console.log('userId =', claims.userId, 'role =', claims.role);",
+                  "  } catch (e) { console.log('could not decode token:', e.message); }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": { "raw": "{{authUrl}}/auth/login", "host": ["{{authUrl}}"], "path": ["auth", "login"] },
+            "description": "Captures {{userToken}} and decodes {{userId}} from the JWT."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Product",
+      "item": [
+        {
+          "name": "Create product  [EVENT]",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.collectionVariables.set('productSlug', 'widget-' + Date.now().toString(36));"]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const id = pm.response.json()?.data?.id;",
+                  "pm.test('product created', () => pm.response.code === 201);",
+                  "pm.test('got product id', () => !!id);",
+                  "if (id) pm.collectionVariables.set('productId', id);",
+                  "console.log('WATCH THE TRACE: product_service/product_created should appear now');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test Widget\",\n  \"price\": 19.99,\n  \"slug\": \"{{productSlug}}\"\n}"
+            },
+            "url": { "raw": "{{productUrl}}/createproduct", "host": ["{{productUrl}}"], "path": ["createproduct"] },
+            "description": "Schema is exactly {name, price, slug}:\n- price must be a NUMBER (19.99), not a string (\"19.99\")\n- slug must be at least 6 characters and unique\n- there is NO description or stock field\n\nFIRES: `product created` on exchange product_service.\nCONSUMED BY: inventory-service, which creates the stock row.\n\nBecause the event has no stock field, inventory initializes it at 0. That is why the next folder has to set stock explicitly."
+          }
+        },
+        {
+          "name": "Get product by id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{productUrl}}/product/{{productId}}",
+              "host": ["{{productUrl}}"],
+              "path": ["product", "{{productId}}"]
+            },
+            "description": "No event. Reads through the Redis cache."
+          }
+        },
+        {
+          "name": "List products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{productUrl}}/products", "host": ["{{productUrl}}"], "path": ["products"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - Inventory",
+      "item": [
+        {
+          "name": "Stock BEFORE update (expect 0)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const stock = pm.response.json()?.data;",
+                  "pm.test('new product starts at 0 stock', () => stock === 0);",
+                  "console.log('stock =', stock, '<- defect #16: product_created carries no stock field');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/stock/{{productId}}",
+              "host": ["{{inventoryUrl}}"],
+              "path": ["stock", "{{productId}}"]
+            },
+            "description": "Expect 0.\n\nThis proves defect #16: the `product created` event carries no stock, so inventory initializes the row at zero. Every new product is unorderable until the next request runs."
+          }
+        },
+        {
+          "name": "Set stock to 100  [EVENT]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('stock updated', () => pm.response.json()?.data?.stock === 100);",
+                  "console.log('WATCH THE TRACE: inventory_service/stock_updated appears (product-service only logs it - Phase 2)');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": {{productId}},\n  \"stock\": 100\n}"
+            },
+            "url": { "raw": "{{inventoryUrl}}/updatestock", "host": ["{{inventoryUrl}}"], "path": ["updatestock"] },
+            "description": "Admin only. Body is {id, stock} - note `id`, not `productId`.\n\nFIRES: `Stock Updated` on exchange inventory_service.\nCONSUMED BY: product-service, which currently only logs it and does NOT invalidate its Redis cache. That stale-cache gap is a Phase 2 item."
+          }
+        },
+        {
+          "name": "Stock AFTER update (expect 100)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('stock is 100', () => pm.response.json()?.data === 100);"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/stock/{{productId}}",
+              "host": ["{{inventoryUrl}}"],
+              "path": ["stock", "{{productId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Order",
+      "item": [
+        {
+          "name": "Create order  [EVENT]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const id = pm.response.json()?.data?.id;",
+                  "pm.test('order created', () => pm.response.code === 201);",
+                  "pm.test('order is pending', () => pm.response.json()?.data?.status === 'pending');",
+                  "if (id) pm.collectionVariables.set('orderId', id);",
+                  "console.log('WATCH THE TRACE: order_service/create_order, then inventory_service/stock_decrement ~10ms later');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": {{userId}},\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 2\n    }\n  ]\n}"
+            },
+            "url": { "raw": "{{orderUrl}}/createorder", "host": ["{{orderUrl}}"], "path": ["createorder"] },
+            "description": "Requires a USER token. An admin token returns 403 'User access required'; no token returns 401.\n\nBEFORE publishing, order-service synchronously HTTP-calls product-service and inventory-service to validate. That blocking call chain on the write path is what Phase 5 removes.\n\nFIRES: `order_created` on exchange order_service.\nCONSUMED BY: inventory-service, which decrements stock, creates a reservation, and then fires `Stock Decrement`.\n\nTry it: change userId to another number while keeping this token. It still works - that is defect #13, the controller reads req.body.userId instead of req.user."
+          }
+        },
+        {
+          "name": "Stock after reservation (expect 98)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('stock reserved', () => pm.response.json()?.data === 98);"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/stock/{{productId}}",
+              "host": ["{{inventoryUrl}}"],
+              "path": ["stock", "{{productId}}"]
+            },
+            "description": "100 - 2 = 98. Inventory did this on its own, in reaction to the event. Nothing called it."
+          }
+        },
+        {
+          "name": "Order status (expect pending)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('still pending', () => pm.response.json()?.data === 'pending');",
+                  "console.log('THE TRACE IS NOW SILENT. Nothing will charge this card until you send the payment request yourself. That silence is the Phase 5 gap.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{orderUrl}}/orderStatus/{{orderId}}",
+              "host": ["{{orderUrl}}"],
+              "path": ["orderStatus", "{{orderId}}"]
+            },
+            "description": "Stop here for a moment and look at your trace terminal.\n\nIt went quiet after stock_decrement and it will stay quiet forever. In a fully event-driven system, the reservation would have triggered payment automatically. Here, YOU are the missing link."
+          }
+        },
+        {
+          "name": "Reservation for this order",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/reservedstock/{{orderId}}",
+              "host": ["{{inventoryUrl}}"],
+              "path": ["reservedstock", "{{orderId}}"]
+            },
+            "description": "Status should be 'pending'."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Payment (happy path)",
+      "item": [
+        {
+          "name": "Pay  [EVENT]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('payment succeeded', () => pm.response.json()?.status === 'success');",
+                  "console.log('WATCH THE TRACE: payment_success, then order_confirmed ~10ms later');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": {{orderId}},\n  \"userId\": {{userId}},\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 2,\n      \"price\": 19.99\n    }\n  ]\n}"
+            },
+            "url": { "raw": "{{paymentUrl}}/create-payment", "host": ["{{paymentUrl}}"], "path": ["create-payment"] },
+            "description": "Makes a REAL Stripe call in TEST mode using your sk_test_ key and the pm_card_visa test card. No real money moves.\n\n`price` must match the order's stored price exactly or you get 'Price mismatch detected'.\n\nFIRES: `payment_success` on exchange payment_service.\nCONSUMED BY: inventory-service, which confirms the reservation and fires `order confirmed`, which order-service consumes to set status=confirmed.\n\nThat is three services and two hops with no orchestrator - genuine choreography."
+          }
+        },
+        {
+          "name": "Order status (expect confirmed)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('order confirmed', () => pm.response.json()?.data === 'confirmed');"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{orderUrl}}/orderStatus/{{orderId}}",
+              "host": ["{{orderUrl}}"],
+              "path": ["orderStatus", "{{orderId}}"]
+            },
+            "description": "Give it a second after paying. order-service changed this itself, reacting to an event - no HTTP call told it to."
+          }
+        },
+        {
+          "name": "Reservation (expect confirmed)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/reservedstock/{{orderId}}",
+              "host": ["{{inventoryUrl}}"],
+              "path": ["reservedstock", "{{orderId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 - Failure path (compensation)",
+      "description": "To test this, run folders 1-4 to get a fresh PENDING order, then skip folder 5 and run this instead.\n\nPostman cannot speak AMQP, but RabbitMQ's management API can publish for you over HTTP - that is what the first request does.",
+      "item": [
+        {
+          "name": "Publish payment_failure  [EVENT]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('event routed to a queue', () => pm.response.json()?.routed === true);",
+                  "console.log('WATCH THE TRACE: payment_failure -> order_failed');",
+                  "console.log('If routed=false, no queue was bound - is inventory-service running?');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                { "key": "username", "value": "guest" },
+                { "key": "password", "value": "guest" }
+              ]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"properties\": { \"delivery_mode\": 2 },\n  \"routing_key\": \"payment_failure\",\n  \"payload\": \"{\\\"event\\\":\\\"payment_failure\\\",\\\"data\\\":{\\\"orderId\\\":\\\"{{orderId}}\\\"}}\",\n  \"payload_encoding\": \"string\"\n}"
+            },
+            "url": {
+              "raw": "{{rabbitUrl}}/api/exchanges/%2F/payment_service/publish",
+              "host": ["{{rabbitUrl}}"],
+              "path": ["api", "exchanges", "%2F", "payment_service", "publish"]
+            },
+            "description": "Injects the event payment-service would publish if Stripe declined. Deterministic, and no external call.\n\nExpect {\"routed\": true}. If you get routed:false, nothing is bound to that routing key - check inventory-service is up.\n\nCONSUMED BY: inventory-service, which releases the stock, cancels the reservation, and fires `order failed`, which order-service consumes to set status=failed.\n\nThis whole chain was silently dead before Phase 1: the two sides disagreed on the exchange name (`inventory_service` vs `invetory_service`)."
+          }
+        },
+        {
+          "name": "Stock rolled back (expect 100)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('stock restored', () => pm.response.json()?.data === 100);"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/stock/{{productId}}",
+              "host": ["{{inventoryUrl}}"],
+              "path": ["stock", "{{productId}}"]
+            },
+            "description": "Back to 100. This is the compensating transaction."
+          }
+        },
+        {
+          "name": "Order status (expect failed)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('order failed', () => pm.response.json()?.data === 'failed');",
+                  "console.log('If this says pending, the order_failed event is not reaching order-service.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{orderUrl}}/orderStatus/{{orderId}}",
+              "host": ["{{orderUrl}}"],
+              "path": ["orderStatus", "{{orderId}}"]
+            },
+            "description": "Expect 'failed'.\n\nThis assertion caught defect #17: the order_failed payload was missing orderId, so order-service could not find the order and left it pending while stock and the reservation were correctly reverted."
+          }
+        },
+        {
+          "name": "Reservation (expect canceled)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{inventoryUrl}}/reservedstock/{{orderId}}",
+              "host": ["{{inventoryUrl}}"],
+              "path": ["reservedstock", "{{orderId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 - Inspect the broker",
+      "description": "RabbitMQ's management API, so you can see queue depths without leaving Postman. Browser version: http://localhost:15672 (guest/guest).",
+      "item": [
+        {
+          "name": "All queues and depths",
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                { "key": "username", "value": "guest" },
+                { "key": "password", "value": "guest" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{rabbitUrl}}/api/queues/%2F?columns=name,messages,consumers",
+              "host": ["{{rabbitUrl}}"],
+              "path": ["api", "queues", "%2F"],
+              "query": [{ "key": "columns", "value": "name,messages,consumers" }]
+            },
+            "description": "Every consumer has three queues:\n- `<service>.<purpose>`        the live queue\n- `<service>.<purpose>.retry`  failed messages waiting out their TTL\n- `<service>.<purpose>.dead`   gave up after 5 attempts, NEEDS A HUMAN\n\nReading the depths:\n- main growing -> consumer down or too slow\n- retry non-empty -> a handler is throwing, check that service's logs\n- dead non-empty -> messages permanently abandoned\n\nconsumers:0 on a live queue means that service is not connected."
+          }
+        },
+        {
+          "name": "Peek at a dead-letter queue",
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                { "key": "username", "value": "guest" },
+                { "key": "password", "value": "guest" }
+              ]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"count\": 10,\n  \"ackmode\": \"ack_requeue_true\",\n  \"encoding\": \"auto\"\n}"
+            },
+            "url": {
+              "raw": "{{rabbitUrl}}/api/queues/%2F/inventory-service.order-created.dead/get",
+              "host": ["{{rabbitUrl}}"],
+              "path": ["api", "queues", "%2F", "inventory-service.order-created.dead", "get"]
+            },
+            "description": "Reads without consuming (ack_requeue_true puts messages back).\n\nChange the queue name in the URL to inspect a different DLQ. Look at the `x-death-reason` header: `malformed` means unparseable JSON, `max-deliveries-exceeded` means the handler threw five times.\n\nTo generate something to look at here, run `node scripts/verify-messaging.js`."
+          }
+        },
+        {
+          "name": "List exchanges",
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                { "key": "username", "value": "guest" },
+                { "key": "password", "value": "guest" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{rabbitUrl}}/api/exchanges/%2F?columns=name,type,durable",
+              "host": ["{{rabbitUrl}}"],
+              "path": ["api", "exchanges", "%2F"],
+              "query": [{ "key": "columns", "value": "name,type,durable" }]
+            },
+            "description": "You should see product_service, order_service, inventory_service, payment_service - all `direct` and durable.\n\nPhase 2 converts these to `topic` exchanges so a routing key like inventory.stock.# can be wildcard-bound."
+          }
+        }
+      ]
+    }
+  ]
+}
