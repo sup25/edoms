@@ -1,6 +1,6 @@
 import { handlePaymentSuccessEvent } from "../handler/handlePaymentSuccessEvent";
 import { EventType, EXCHANGE_FOR } from "@edoms/shared-events";
-import { publish } from "../rabbitmq/publisher";
+import { publishToOutbox } from "../rabbitmq/outbox";
 import { processOnce } from "../utils/idempotency";
 import OrderReservation from "../model/orderReservation.model";
 import sequelize from "../config/db";
@@ -17,7 +17,13 @@ jest.mock("../model/processedEvent.model", () => ({
   __esModule: true,
   default: { create: jest.fn() },
 }));
-jest.mock("../rabbitmq/publisher", () => ({ publish: jest.fn().mockResolvedValue("evt-1") }));
+jest.mock("../model/outbox.model", () => ({
+  __esModule: true,
+  default: { create: jest.fn() },
+}));
+jest.mock("../rabbitmq/outbox", () => ({
+  publishToOutbox: jest.fn().mockResolvedValue("evt-1"),
+}));
 jest.mock("../rabbitmq/subscriber", () => ({ subscribeEvent: jest.fn() }));
 jest.mock("../utils/logger", () => ({
   __esModule: true,
@@ -25,7 +31,7 @@ jest.mock("../utils/logger", () => ({
 }));
 jest.mock("../utils/idempotency", () => ({ processOnce: jest.fn() }));
 
-const mockedPublish = publish as jest.Mock;
+const mockedPublish = publishToOutbox as jest.Mock;
 const mockedProcessOnce = processOnce as jest.Mock;
 const mockedQuery = sequelize.query as jest.Mock;
 const mockedFindAll = OrderReservation.findAll as unknown as jest.Mock;
@@ -64,6 +70,7 @@ describe("handlePaymentSuccessEvent", () => {
     expect(mockedPublish).toHaveBeenCalledWith(
       EventType.RESERVATION_CONFIRMED,
       expect.objectContaining({ orderId: 71 }),
+      expect.anything(), // transaction
       expect.anything()
     );
     expect(EXCHANGE_FOR[EventType.RESERVATION_CONFIRMED]).toBe("inventory.events");

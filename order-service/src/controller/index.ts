@@ -9,7 +9,8 @@ import {
 } from "../service";
 import { randomUUID } from "crypto";
 import { EventType } from "@edoms/shared-events";
-import { publish } from "../rabbitmq/publisher";
+import sequelize from "../config/db";
+import { publishToOutbox } from "../rabbitmq/outbox";
 import { PRODUCT_SERVICE_URL, STOCK_SERVICE_URL } from "../config/apiEndpoints";
 import logger from "../utils/logger";
 import redis from "../utils/redis";
@@ -172,27 +173,40 @@ export const createOrderController = expressAsyncHandler(
 
     // Step 4: Create the order using the service
     try {
-      const result = await createOrderService({ userId, items: orderItems });
+      /*
+       * The order row and the event that announces it are written in ONE
+       * transaction. Before Phase 4 these were separate operations, so a crash
+       * between them left an order nothing ever reacted to - stuck pending,
+       * no stock reserved, no error anywhere (defect #10).
+       *
+       * The relay publishes the outbox row immediately afterwards.
+       */
+      const correlationId = randomUUID();
+      const result = await sequelize.transaction(async (transaction) => {
+        const created = await createOrderService(
+          { userId, items: orderItems },
+          transaction
+        );
 
-      // Step 5: Publish the event
-      const eventData = {
-        orderId: result.order.id,
-        userId: result.order.userId,
-        items: orderItems.map((item: any) => ({
-          productId: item.productId,
-          quantity: item.quantity,
-          price: item.price,
-          total: item.quantity * item.price, // Ensure total is calculated
-        })),
-        status: result.order.status,
-        createdAt: result.order.createdAt,
-        totalAmount: result.order.totalAmount,
-      };
+        const eventData = {
+          orderId: created.order.id,
+          userId: created.order.userId,
+          items: orderItems.map((item: any) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            price: item.price,
+            total: item.quantity * item.price,
+          })),
+          status: created.order.status,
+          createdAt: created.order.createdAt,
+          totalAmount: created.order.totalAmount,
+        };
 
-      // The correlationId is minted here, at the start of the business
-      // transaction, and every downstream event carries it.
-      await publish(EventType.ORDER_CREATED, eventData, {
-        correlationId: randomUUID(),
+        await publishToOutbox(EventType.ORDER_CREATED, eventData, transaction, {
+          correlationId,
+        });
+
+        return created;
       });
 
       // Step 6: Send success response

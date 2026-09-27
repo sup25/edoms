@@ -6,7 +6,8 @@ import express, { Express } from "express";
 import { createOrderController } from "../controller";
 import axios from "axios";
 import { createOrderService } from "../service";
-import { publish } from "../rabbitmq/publisher";
+import { publishToOutbox } from "../rabbitmq/outbox";
+import sequelize from "../config/db";
 import { STATUS_CODES } from "../constants";
 import { requireUser } from "../middleware/ValidateUser";
 import { validate } from "../middleware/validateRequest";
@@ -28,11 +29,29 @@ jest.mock("ioredis", () => {
 });
 jest.mock("../service");
 jest.mock("../rabbitmq/publisher");
+jest.mock("../model/outbox.model", () => ({
+  __esModule: true,
+  default: { create: jest.fn() },
+}));
+jest.mock("../rabbitmq/outbox", () => ({
+  publishToOutbox: jest.fn().mockResolvedValue("evt-1"),
+  startOutboxRelay: jest.fn(),
+  stopOutboxRelay: jest.fn(),
+}));
 jest.mock("../middleware/ValidateUser");
 jest.mock("../middleware/validateRequest");
 
 describe("createOrder", () => {
   let app: Express;
+
+  beforeAll(() => {
+    // The controller wraps the order insert and the outbox write in one
+    // transaction. Stub just that method - mocking config/db wholesale would
+    // break Order.init(), which needs a real Sequelize instance.
+    jest
+      .spyOn(sequelize, "transaction")
+      .mockImplementation((async (cb: any) => cb({})) as any);
+  });
 
   beforeAll(() => {
     // Set up the Express app with the route
@@ -134,7 +153,7 @@ describe("createOrder", () => {
       createdAt: new Date().toISOString(), // Convert to string to match response
     };
     (createOrderService as jest.Mock).mockResolvedValue({ order: mockOrder });
-    (publish as jest.Mock).mockResolvedValue(true);
+    (publishToOutbox as jest.Mock).mockResolvedValue("evt-1");
 
     const response = await request(app)
       .post("/createorder")
@@ -147,7 +166,10 @@ describe("createOrder", () => {
       data: mockOrder,
     });
     expect(mockRedisSet).toHaveBeenCalled();
-    expect(publish).toHaveBeenCalled();
+    // The order row and its event are written in ONE transaction (defect #10):
+    // the controller writes to the outbox, never straight to the broker.
+    expect(publishToOutbox).toHaveBeenCalled();
+    expect(sequelize.transaction).toHaveBeenCalled();
   });
 
   it("should return 400 when stock is insufficient", async () => {

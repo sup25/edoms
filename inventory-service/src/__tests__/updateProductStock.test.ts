@@ -1,7 +1,7 @@
 import connectdb from "../config/db";
 import { updateProductStockController } from "../controller";
 import { EventType } from "@edoms/shared-events";
-import { publish } from "../rabbitmq/publisher";
+import { publishToOutbox } from "../rabbitmq/outbox";
 import { updateProductStockService } from "../service";
 import { Request, Response, NextFunction } from "express";
 
@@ -50,6 +50,13 @@ jest.mock("../model/orderReservation.model", () => {
 jest.mock("../config/db");
 jest.mock("../rabbitmq/publisher", () => ({
   publish: jest.fn().mockResolvedValue("evt-1"),
+}));
+jest.mock("../model/outbox.model", () => ({
+  __esModule: true,
+  default: { create: jest.fn() },
+}));
+jest.mock("../rabbitmq/outbox", () => ({
+  publishToOutbox: jest.fn().mockResolvedValue("evt-1"),
 }));
 jest.mock("../service", () => ({
   updateProductStockService: jest.fn(),
@@ -219,7 +226,7 @@ describe("Product Stock Management", () => {
       (updateProductStockService as jest.Mock).mockResolvedValue(
         mockStockInstance
       );
-      (publish as jest.Mock).mockResolvedValue(true);
+      (publishToOutbox as jest.Mock).mockResolvedValue(true);
 
       await updateProductStockController(mockReq, mockRes, mockNext);
 
@@ -227,10 +234,11 @@ describe("Product Stock Management", () => {
         id: 1,
         stock: 10,
       });
-      expect(publish).toHaveBeenCalledWith(EventType.STOCK_UPDATED, {
-        productId: 1,
-        stock: 10,
-      });
+      expect(publishToOutbox).toHaveBeenCalledWith(
+        EventType.STOCK_UPDATED,
+        { productId: 1, stock: 10 },
+        expect.anything() // transaction
+      );
       expect(mockRes.status).toHaveBeenCalledWith(200);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: true,

@@ -1,3 +1,4 @@
+import type { Transaction } from "sequelize";
 import Order from "../model/order.model";
 
 interface IOrderItem {
@@ -12,10 +13,10 @@ interface ICreateOrderParams {
   items: IOrderItem[];
 }
 
-export const createOrderService = async ({
-  userId,
-  items,
-}: ICreateOrderParams) => {
+export const createOrderService = async (
+  { userId, items }: ICreateOrderParams,
+  transaction?: Transaction
+) => {
   const orderItems = [];
   let totalAmount = 0;
 
@@ -33,11 +34,10 @@ export const createOrderService = async ({
   }
 
   // Create order in the database
-  const order = await Order.create({
-    userId,
-    items: orderItems,
-    status: "pending",
-  });
+  const order = await Order.create(
+    { userId, items: orderItems, status: "pending" },
+    { transaction }
+  );
 
   return {
     success: true,

@@ -27,6 +27,7 @@ const PAYMENT = "http://localhost:5004/api/v1";
 const FAIL_MODE = process.argv.includes("--fail");
 const OVERSELL_MODE = process.argv.includes("--oversell");
 const DUPLICATE_MODE = process.argv.includes("--duplicate");
+const CRASH_MODE = process.argv.includes("--crash");
 const PASSWORD = "Password123!";
 const QTY = 2;
 const START_STOCK = 100;
@@ -71,6 +72,65 @@ function envelope(eventType, payload, messageId) {
     correlationId: `smoke-corr-${Date.now()}`,
     payload,
   };
+}
+
+/**
+ * Reads a service's .env without importing dotenv (these are CRLF files, so a
+ * naive regex with $ anchors misses the value).
+ */
+function serviceEnv(service) {
+  const fs = require("fs");
+  const text = fs.readFileSync(path.resolve(__dirname, "..", service, ".env"), "utf8");
+  const out = {};
+  for (const line of text.split(String.fromCharCode(10))) {
+    // .env files here are CRLF; the trailing carriage return breaks a $ anchor.
+    const m = line.trim().match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+    if (m) out[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+  }
+  return out;
+}
+
+/**
+ * Writes a pending outbox row directly, with no in-process publish call.
+ *
+ * This is exactly the state a service leaves behind when it commits a domain
+ * change and then dies before the relay runs. If the relay is doing its job,
+ * the event is published anyway.
+ */
+async function insertOutboxRow(service, eventType, payload) {
+  const { Client } = requireFromServices("pg");
+  const env = serviceEnv(service);
+  const client = new Client({
+    host: env.DB_HOST, port: Number(env.DB_PORT || 5432),
+    user: env.DB_USERNAME, password: env.DB_PASSWORD, database: env.DB_NAME,
+  });
+  await client.connect();
+  // event_id is a UUID column, so the simulated row needs a real UUID.
+  const eventId = require("crypto").randomUUID();
+  await client.query(
+    `INSERT INTO outbox_events
+       (event_id, event_type, payload, correlation_id, causation_id,
+        status, attempts, available_at, created_at)
+     VALUES ($1, $2, $3::jsonb, $4, NULL, 'pending', 0, NOW(), NOW())`,
+    [eventId, eventType, JSON.stringify(payload), `crash-corr-${Date.now()}`]
+  );
+  await client.end();
+  return eventId;
+}
+
+async function outboxRowStatus(service, eventId) {
+  const { Client } = requireFromServices("pg");
+  const env = serviceEnv(service);
+  const client = new Client({
+    host: env.DB_HOST, port: Number(env.DB_PORT || 5432),
+    user: env.DB_USERNAME, password: env.DB_PASSWORD, database: env.DB_NAME,
+  });
+  await client.connect();
+  const r = await client.query(
+    "SELECT status, attempts FROM outbox_events WHERE event_id = $1", [eventId]
+  );
+  await client.end();
+  return r.rows[0];
 }
 
 function requireFromServices(moduleName) {
@@ -142,7 +202,9 @@ async function register(role) {
 (async () => {
   console.log(
     `\n${BOLD}EDOMS smoke test${RESET} - ${
-      OVERSELL_MODE
+      CRASH_MODE
+        ? "CRASH RECOVERY (outbox relay)"
+        : OVERSELL_MODE
         ? "OVERSELL (handler must refuse)"
         : DUPLICATE_MODE
         ? "DUPLICATE delivery (idempotency)"
@@ -179,6 +241,49 @@ async function register(role) {
   await sleep(800);
   const stocked = await api(`${INVENTORY}/stock/${productId}`);
   assert("stock set", stocked.body?.data, START_STOCK);
+
+  if (CRASH_MODE) {
+    /*
+     * Simulate a service that committed its domain change and then died
+     * before publishing: write the outbox row directly, with no publish call
+     * anywhere in this process. Only the relay can deliver it.
+     */
+    const fakeOrderId = 900000 + Math.floor(Math.random() * 90000);
+    console.log(`
+${BOLD}writing an outbox row directly${RESET} ${DIM}(no publish call)${RESET}`);
+    const eventId = await insertOutboxRow("order-service", "order.created", {
+      orderId: fakeOrderId,
+      items: [{ productId, quantity: QTY }],
+    });
+    console.log(`${DIM}  event ${eventId} written as pending${RESET}`);
+
+    const before = await outboxRowStatus("order-service", eventId);
+    assert("row starts pending", before?.status, "pending");
+
+    // Relay polls every second; give it room plus consumer time.
+    await sleep(6000);
+
+    const after = await outboxRowStatus("order-service", eventId);
+    assert("relay published it and marked it sent", after?.status, "sent");
+
+    const stock = await api(`${INVENTORY}/stock/${productId}`);
+    assert(
+      "the event actually reached inventory (stock reserved)",
+      stock.body?.data,
+      START_STOCK - QTY
+    );
+
+    console.log(
+      failures === 0
+        ? `
+${GREEN}${BOLD}All checks passed.${RESET}  productId=${productId}
+`
+        : `
+${RED}${BOLD}${failures} check(s) failed.${RESET}
+`
+    );
+    process.exit(failures === 0 ? 0 : 1);
+  }
 
   // --- order ---
   const orderQty = QTY;

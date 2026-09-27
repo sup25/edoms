@@ -14,6 +14,12 @@ export interface PublishOptions {
   correlationId?: string;
   /** eventId of the event being reacted to, if any. */
   causationId?: string;
+  /**
+   * Reuse an existing eventId instead of minting one. The outbox relay passes
+   * the id it stored, so a retry republishes the SAME id and consumers
+   * deduplicate it rather than processing it twice.
+   */
+  eventId?: string;
   maxRetries?: number;
   retryDelay?: number;
 }
@@ -34,7 +40,7 @@ export async function publish<T>(
   payload: T,
   options: PublishOptions = {}
 ): Promise<string> {
-  const { correlationId, causationId, maxRetries = 3, retryDelay = 1000 } = options;
+  const { correlationId, causationId, eventId, maxRetries = 3, retryDelay = 1000 } = options;
 
   const exchange = EXCHANGE_FOR[eventType];
   if (!exchange) {
@@ -49,6 +55,7 @@ export async function publish<T>(
     correlationId,
     causationId,
   });
+  if (eventId) envelope.eventId = eventId;
   const body = Buffer.from(JSON.stringify(envelope));
 
   let attempts = 0;

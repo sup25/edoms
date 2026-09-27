@@ -10,7 +10,8 @@ import {
 } from "../service";
 import { STATUS_CODES } from "../constants";
 import { EventType } from "@edoms/shared-events";
-import { publish } from "../rabbitmq/publisher";
+import connectdb from "../config/db";
+import { publishToOutbox } from "../rabbitmq/outbox";
 import redis from "../utils/redis";
 import axios from "axios";
 import { INVENTORY_SERVICE_URL } from "../config/apiEndpoints";
@@ -31,7 +32,9 @@ export const createProductController = expressAsyncHandler(
         slug,
       });
       try {
-        await publish(EventType.PRODUCT_CREATED, createProduct);
+        await connectdb.transaction(async (transaction) =>
+          publishToOutbox(EventType.PRODUCT_CREATED, createProduct, transaction)
+        );
       } catch (eventError) {
         logger.error(`❌ Failed to publish ProductCreated event:`, eventError);
       }
@@ -191,7 +194,9 @@ export const updateProductController = expressAsyncHandler(
       try {
         // Payload is the product itself, not { updateProduct }. Nothing
         // consumed this event before Phase 2, so the nesting never surfaced.
-        await publish(EventType.PRODUCT_UPDATED, updateProduct);
+        await connectdb.transaction(async (transaction) =>
+          publishToOutbox(EventType.PRODUCT_UPDATED, updateProduct, transaction)
+        );
       } catch (eventError) {
         logger.error(`❌ Failed to publish ProductCreated event:`, eventError);
       }
@@ -229,7 +234,9 @@ export const deleteProductController = expressAsyncHandler(
     try {
       await deleteProductService(id);
       try {
-        await publish(EventType.PRODUCT_DELETED, { id });
+        await connectdb.transaction(async (transaction) =>
+          publishToOutbox(EventType.PRODUCT_DELETED, { id }, transaction)
+        );
       } catch (eventError) {
         logger.error(`❌ Failed to publish Product Deleted event:`, eventError);
       }

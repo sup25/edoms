@@ -1,6 +1,6 @@
 import { EventType } from "@edoms/shared-events";
 import { handleOrderReservationEvent } from "../handler/handleOrderReservationEvent";
-import { publish } from "../rabbitmq/publisher";
+import { publishToOutbox } from "../rabbitmq/outbox";
 import { processOnce } from "../utils/idempotency";
 import OrderReservation from "../model/orderReservation.model";
 import sequelize from "../config/db";
@@ -19,7 +19,13 @@ jest.mock("../model/processedEvent.model", () => ({
   __esModule: true,
   default: { create: jest.fn() },
 }));
-jest.mock("../rabbitmq/publisher", () => ({ publish: jest.fn().mockResolvedValue("evt-1") }));
+jest.mock("../model/outbox.model", () => ({
+  __esModule: true,
+  default: { create: jest.fn() },
+}));
+jest.mock("../rabbitmq/outbox", () => ({
+  publishToOutbox: jest.fn().mockResolvedValue("evt-1"),
+}));
 jest.mock("../rabbitmq/subscriber", () => ({ subscribeEvent: jest.fn() }));
 jest.mock("../utils/logger", () => ({
   __esModule: true,
@@ -27,7 +33,7 @@ jest.mock("../utils/logger", () => ({
 }));
 jest.mock("../utils/idempotency", () => ({ processOnce: jest.fn() }));
 
-const mockedPublish = publish as jest.Mock;
+const mockedPublish = publishToOutbox as jest.Mock;
 const mockedProcessOnce = processOnce as jest.Mock;
 const mockedQuery = sequelize.query as jest.Mock;
 const mockedUpsert = OrderReservation.upsert as unknown as jest.Mock;
@@ -40,18 +46,28 @@ const META = {
   queue: "q",
 };
 
-/** Runs the work callback against a fake transaction, like the real helper. */
+/*
+ * Two distinguishable transaction objects. An outbox row written on
+ * RESERVATION_TX is rolled back with the reservation when stock is short, so
+ * it never reaches the broker; the failure event is written on its own
+ * transaction, which commits. Asserting WHICH transaction each write used is
+ * how we verify that at the unit level.
+ */
+const RESERVATION_TX = { tx: "reservation" } as any;
+const FAILURE_TX = { tx: "failure" } as any;
+
+/** Runs the work callback against the reservation transaction. */
 function runWork() {
   mockedProcessOnce.mockImplementation(async (_c, _e, _m, work) => {
-    await work({} as any);
+    await work(RESERVATION_TX);
     return true;
   });
 }
 
-/** The real helper lets the work's error propagate (rolling back). */
+/** Same, for the paths where the work then rolls back. */
 function runWorkPropagating() {
   mockedProcessOnce.mockImplementation(async (_c, _e, _m, work) => {
-    await work({} as any);
+    await work(RESERVATION_TX);
     return true;
   });
 }
@@ -60,9 +76,14 @@ const publishedTypes = () => mockedPublish.mock.calls.map((c) => c[0]);
 const publishedOf = (type: string) =>
   mockedPublish.mock.calls.filter((c) => c[0] === type);
 
+const mockedTransaction = sequelize.transaction as unknown as jest.Mock;
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockedUpsert.mockResolvedValue([{}, true]);
+  // The reservation-failed path opens its own transaction (the reservation one
+  // has already rolled back), so the mock has to actually run the callback.
+  mockedTransaction.mockImplementation(async (cb: any) => cb(FAILURE_TX));
 });
 
 describe("handleOrderReservationEvent", () => {
@@ -76,7 +97,11 @@ describe("handleOrderReservationEvent", () => {
     );
 
     expect(mockedUpsert).toHaveBeenCalledTimes(2);
-    expect(publishedOf(EventType.STOCK_RESERVED)).toHaveLength(2);
+    const reservedWrites = publishedOf(EventType.STOCK_RESERVED);
+    expect(reservedWrites).toHaveLength(2);
+    // Written in the SAME transaction as the stock decrement - that is the
+    // whole point of the outbox (defect #10).
+    for (const call of reservedWrites) expect(call[2]).toBe(RESERVATION_TX);
     expect(publishedTypes()).not.toContain(EventType.RESERVATION_FAILED);
   });
 
@@ -91,7 +116,7 @@ describe("handleOrderReservationEvent", () => {
 
     // Without this the async chain cannot be reconstructed from logs.
     for (const call of mockedPublish.mock.calls) {
-      expect(call[2]).toMatchObject({ correlationId: "corr-abc" });
+      expect(call[3]).toMatchObject({ correlationId: "corr-abc" });
     }
   });
 
@@ -114,9 +139,19 @@ describe("handleOrderReservationEvent", () => {
       requestedQuantity: 99,
       reason: "insufficient_stock",
     });
+    // The failure event is written on its OWN transaction, which commits -
+    // otherwise the order would hang pending forever.
+    expect(failed[0][2]).toBe(FAILURE_TX);
 
-    // defect #6: no partial reservation is left behind
-    expect(publishedOf(EventType.STOCK_RESERVED)).toHaveLength(0);
+    /*
+     * defect #6: the first item's outbox row was written on the reservation
+     * transaction, which rolls back, so no partial reservation is announced.
+     * The mock still records the call; what matters is which transaction it
+     * was written on.
+     */
+    for (const call of publishedOf(EventType.STOCK_RESERVED)) {
+      expect(call[2]).toBe(RESERVATION_TX);
+    }
   });
 
   it("does not decrement twice when the event is redelivered (defect #8)", async () => {
@@ -140,6 +175,7 @@ describe("handleOrderReservationEvent", () => {
     );
 
     expect(publishedOf(EventType.RESERVATION_FAILED)).toHaveLength(1);
+    expect(publishedOf(EventType.RESERVATION_FAILED)[0][2]).toBe(FAILURE_TX);
     expect(mockedQuery).not.toHaveBeenCalled();
   });
 
