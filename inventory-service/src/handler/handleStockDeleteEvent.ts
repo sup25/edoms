@@ -39,6 +39,8 @@ export async function handleStockDelete(eventType: string, event: any) {
     }
   } catch (error) {
     logger.error(" Error handling stock deletion event:", error);
+    // Rethrow so the subscriber can retry and eventually dead-letter.
+    throw error;
   }
 }
 
@@ -51,7 +53,8 @@ export async function startProductStockDeletionEventService() {
       async (eventType: string, data: any) => {
         logger.info(` Received event: ${eventType}`, data);
         await handleStockDelete(eventType, data);
-      }
+      },
+      { queue: "inventory-service.product-deleted" }
     );
 
     logger.info("Service started for product delete event");

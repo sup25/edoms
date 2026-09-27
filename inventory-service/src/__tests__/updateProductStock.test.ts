@@ -12,7 +12,7 @@ interface MockStockInstance {
   save: jest.Mock<Promise<MockStockInstance>, []>;
   toJSON: jest.Mock;
 }
-jest.mock("../model/inventory.model", () => {
+jest.mock("../model/stock.model", () => {
   const mockStockInstance = {
     productId: 1,
     stock: 0,
@@ -69,7 +69,7 @@ describe("Product Stock Management", () => {
   let mockRes: MockResponse;
   let mockNext: NextFunction;
 
-  const MockStock = jest.requireMock("../model/inventory.model").default;
+  const MockStock = jest.requireMock("../model/stock.model").default;
 
   beforeEach(() => {
     jest.clearAllMocks();

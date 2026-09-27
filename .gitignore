@@ -1,0 +1,129 @@
+# ---------------------------------------------------------------
+# EDOMS - root gitignore
+# Per-service .gitignore files still apply inside each service dir.
+# ---------------------------------------------------------------
+
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs
+logs/
+*.log
+
+# Test / coverage artifacts
+coverage/
+.nyc_output/
+jest-cache/
+
+# Local infrastructure data
+pgdata/
+data/
+redis-data/
+rabbitmq-data/
+docker-compose.override.yml
+Dockerfile.local
+
+# Editors / IDE
+.vscode/
+.idea/
+*.sublime-*
+.zed/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# ---------------------------------------------------------------
+# AI coding agents / chat co-authors
+# Local assistant config, transcripts, caches and scratch context.
+# These are personal to each contributor - never committed.
+# ---------------------------------------------------------------
+
+# Project AI context (working notes, version + phase tracker)
+AI_CONTEXT.md
+.ai/
+
+# Claude / Claude Code
+.claude/
+.claude.json
+CLAUDE.md
+CLAUDE.local.md
+
+# OpenAI Codex / generic agent instruction files
+.codex/
+AGENTS.md
+
+# Google Gemini
+.gemini/
+GEMINI.md
+
+# Cursor
+.cursor/
+.cursorrules
+.cursorignore
+.cursorindexingignore
+
+# Windsurf / Codeium
+.windsurf/
+.windsurfrules
+.codeium/
+
+# Cline / Roo Code
+.cline/
+.clinerules
+.clinerules/
+.roo/
+.roomodes
+
+# Aider
+.aider*
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache*
+
+# GitHub Copilot
+.github/copilot-instructions.md
+.copilot/
+
+# Continue
+.continue/
+
+# Sourcegraph Cody
+.cody/
+
+# JetBrains Junie
+.junie/
+
+# Qodo / CodiumAI
+.codiumai.toml
+.qodo/
+
+# Amp / OpenCode / Crush / Goose
+.amp/
+.opencode/
+.crush/
+.goose/
+
+# Misc
+*.bak
+*.swp
+*~

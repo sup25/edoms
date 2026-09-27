@@ -38,10 +38,12 @@ export async function handleStockDecrement(eventType: string, event: any) {
         `Stock updated for product ${productId} in Redis to: ${updatedStock}`
       );
     } catch (error) {
-      console.error(
+      logger.error(
         `Failed to update stock for product ${productId} in Redis:`,
         error instanceof Error ? error.message : String(error)
       );
+      // Rethrow so the subscriber can retry and eventually dead-letter.
+      throw error;
     }
   }
 }
@@ -53,7 +55,8 @@ export async function startStockDecrementEventService() {
     "direct",
     async (eventType: string, data: any) => {
       await handleStockDecrement(eventType, data);
-    }
+    },
+    { queue: "product-service.stock-decrement" }
   );
 
   logger.info("service started for stock decrement event");

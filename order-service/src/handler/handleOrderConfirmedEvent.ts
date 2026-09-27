@@ -46,13 +46,14 @@ export async function handleOrderConfirmedEvent(
 
 export async function startOrderConfirmEventService() {
   await subscribeEvent(
-    "invetory_service",
+    "inventory_service",
     "order_confirmed",
     "direct",
     async (eventType: string, data: any) => {
       logger.info(`Received event: ${eventType}`, data);
       await handleOrderConfirmedEvent(eventType, data);
-    }
+    },
+    { queue: "order-service.order-confirmed" }
   );
 
   logger.info("Order confirmation service started");

@@ -12,6 +12,8 @@ import { startPaymentSuccessEventService } from "./handler/handlePaymentSuccessE
 import { startProductStockInitializationEventService } from "./handler/handleProductStockInitializationEvent";
 import { startProductStockDeletionEventService } from "./handler/handleStockDeleteEvent";
 import { startPaymentFailureEventService } from "./handler/handlePaymentFailure.Event";
+import { closeBroker } from "./rabbitmq/connection";
+import ProcessedEvent from "./model/processedEvent.model";
 
 const app = express();
 
@@ -25,6 +27,8 @@ const app = express();
 
     await OrderReservation.sync({ alter: true });
     logger.info("OrderReservation table synced");
+    await ProcessedEvent.sync({ alter: true });
+    logger.info("ProcessedEvent table synced");
   } catch (error) {
     logger.error("Error during DB setup: %o", error);
     process.exit(1);
@@ -53,5 +57,21 @@ if (process.env.NODE_ENV !== "test") {
     logger.error("Error starting server: %o", error);
   }
 }
+
+/* Graceful shutdown: stop taking new work, drain in-flight messages. */
+async function shutdown(signal: string) {
+  logger.info(`${signal} received, shutting down`);
+  try {
+    await closeBroker();
+    await connectdb.close();
+  } catch (error) {
+    logger.error("Error during shutdown", error);
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
 
 export { app };

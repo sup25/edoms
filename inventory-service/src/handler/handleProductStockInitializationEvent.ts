@@ -54,6 +54,8 @@ export async function handleProductStockInitialization(
     }
   } catch (error) {
     logger.error("Error handling product event:", error);
+    // Rethrow so the subscriber can retry and eventually dead-letter.
+    throw error;
   }
 }
 
@@ -68,7 +70,8 @@ export async function startProductStockInitializationEventService() {
     async (eventType: string, data: ProductEvent) => {
       logger.info(`Received event: ${eventType}`, data);
       await handleProductStockInitialization(eventType, data);
-    }
+    },
+    { queue: "inventory-service.product-created" }
   );
 
   logger.info("Service started for product stock initialization event");

@@ -40,6 +40,8 @@ export async function handleStockRollBack(eventType: string, event: any) {
         `Failed to rollback stock for product ${productId} in Redis:`,
         error instanceof Error ? error.message : String(error)
       );
+      // Rethrow so the subscriber can retry and eventually dead-letter.
+      throw error;
     }
   }
 }
@@ -51,6 +53,7 @@ export async function startStockRollBackEventService() {
     "direct",
     async (eventType: string, data: any) => {
       await handleStockRollBack(eventType, data);
-    }
+    },
+    { queue: "product-service.order-failed" }
   );
 }

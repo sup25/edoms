@@ -1,13 +1,20 @@
-import amqplib from "amqplib";
-import { BrokerConfig } from "../config/brokerConfig";
+import { randomUUID } from "crypto";
+import { getPublishChannel } from "./connection";
+import type { ExchangeType } from "./topology";
 import logger from "../utils/logger";
 
 /**
- * Publishes an event to a RabbitMQ exchange with retry logic.
+ * Publishes an event to a RabbitMQ exchange.
+ *
+ * Durability guarantees (Phase 1):
+ * - reuses one long-lived connection instead of dialling per publish
+ * - messages are marked persistent so they survive a broker restart
+ * - uses a confirm channel and waits for the broker ack, so this resolves only
+ *   once the broker has actually taken responsibility for the message
  *
  * @param exchangeName - The exchange to publish to.
  * @param routingKey - The routing key (use "" for fanout).
- * @param eventType - The type of event (e.g., "order_created").
+ * @param eventType - The type of event (e.g. "order_created").
  * @param data - The event payload.
  * @param exchangeType - The type of exchange (default: "direct").
  * @param maxRetries - Number of retry attempts (default: 3).
@@ -18,7 +25,7 @@ export async function publishEvent(
   routingKey: string,
   eventType: string,
   data: any,
-  exchangeType: "fanout" | "direct" | "topic" = "direct",
+  exchangeType: ExchangeType = "direct",
   maxRetries: number = 3,
   retryDelay: number = 1000
 ): Promise<void> {
@@ -26,23 +33,41 @@ export async function publishEvent(
     logger.warn(`Publishing ${eventType} skipped due to maxRetries = 0`);
     return;
   }
+
+  const messageId = randomUUID();
+  const payload = Buffer.from(JSON.stringify({ event: eventType, data }));
+
   let attempts = 0;
 
   while (attempts <= maxRetries) {
-    let connection;
-    let channel;
     try {
-      connection = await amqplib.connect(BrokerConfig.amqpUrl);
-      channel = await connection.createChannel();
-
+      const channel = await getPublishChannel();
       await channel.assertExchange(exchangeName, exchangeType, {
         durable: true,
       });
 
-      const message = JSON.stringify({ event: eventType, data });
-      channel.publish(exchangeName, routingKey, Buffer.from(message));
-      logger.info(`Event published: ${eventType}`, message);
+      // Resolves when the broker confirms the message, rejects if it is lost.
+      await new Promise<void>((resolve, reject) => {
+        channel.publish(
+          exchangeName,
+          routingKey,
+          payload,
+          {
+            persistent: true,
+            contentType: "application/json",
+            messageId,
+            timestamp: Date.now(),
+            type: eventType,
+          },
+          (error) => (error ? reject(error) : resolve())
+        );
+      });
 
+      logger.info(`Event published: ${eventType}`, {
+        messageId,
+        exchangeName,
+        routingKey,
+      });
       return;
     } catch (error: unknown) {
       attempts++;
@@ -59,13 +84,6 @@ export async function publishEvent(
 
       logger.warn(`Retry ${attempts}/${maxRetries} for ${eventType}`, error);
       await new Promise((resolve) => setTimeout(resolve, retryDelay));
-    } finally {
-      try {
-        if (channel) await channel.close();
-        if (connection) await connection.close();
-      } catch (cleanupError) {
-        logger.warn("Error during AMQP cleanup", cleanupError);
-      }
     }
   }
 }
