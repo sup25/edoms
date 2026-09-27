@@ -14,6 +14,8 @@ import { startProductStockDeletionEventService } from "./handler/handleStockDele
 import { startPaymentFailureEventService } from "./handler/handlePaymentFailure.Event";
 import { closeBroker } from "./rabbitmq/connection";
 import ProcessedEvent from "./model/processedEvent.model";
+import OutboxEvent from "./model/outbox.model";
+import { startOutboxRelay, stopOutboxRelay } from "./rabbitmq/outbox";
 
 const app = express();
 
@@ -29,6 +31,9 @@ const app = express();
     logger.info("OrderReservation table synced");
     await ProcessedEvent.sync({ alter: true });
     logger.info("ProcessedEvent table synced");
+    await OutboxEvent.sync({ alter: true });
+    logger.info("Outbox table synced");
+    startOutboxRelay();
   } catch (error) {
     logger.error("Error during DB setup: %o", error);
     process.exit(1);
@@ -62,6 +67,7 @@ if (process.env.NODE_ENV !== "test") {
 async function shutdown(signal: string) {
   logger.info(`${signal} received, shutting down`);
   try {
+    stopOutboxRelay();
     await closeBroker();
     await connectdb.close();
   } catch (error) {

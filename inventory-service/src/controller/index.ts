@@ -9,7 +9,8 @@ import {
   updateProductStockService,
 } from "../service";
 import { EventType } from "@edoms/shared-events";
-import { publish } from "../rabbitmq/publisher";
+import sequelize from "../config/db";
+import { publishToOutbox } from "../rabbitmq/outbox";
 
 export const getProductStockController = expressAsyncHandler(
   async (req: Request, res: Response) => {
@@ -64,10 +65,13 @@ export const updateProductStockController = expressAsyncHandler(
     const { id, stock } = req.body;
     try {
       const updatedStock = await updateProductStockService({ id, stock });
-      await publish(EventType.STOCK_UPDATED, {
-        productId: id,
-        stock: stock,
-      });
+      await sequelize.transaction(async (transaction) =>
+        publishToOutbox(
+          EventType.STOCK_UPDATED,
+          { productId: id, stock: stock },
+          transaction
+        )
+      );
       res.status(STATUS_CODES.OK).json({
         success: true,
         message: "product Stock updated successfully",

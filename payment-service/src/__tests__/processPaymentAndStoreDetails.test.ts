@@ -4,7 +4,8 @@ import axios from "axios";
 import { processPaymentAndStoreDetailsController } from "../controller";
 import { processPaymentAndStoreDetailsService } from "../service";
 import { EventType } from "@edoms/shared-events";
-import { publish } from "../rabbitmq/publisher";
+import { publishToOutbox } from "../rabbitmq/outbox";
+import connectdb from "../config/db";
 import { calculateTotalAmount } from "../utils/calculateTotalAmount";
 import { STATUS_CODES } from "../constants";
 
@@ -12,11 +13,19 @@ import { STATUS_CODES } from "../constants";
 jest.mock("axios");
 jest.mock("../service");
 jest.mock("../rabbitmq/publisher");
+jest.mock("../model/outbox.model", () => ({
+  __esModule: true,
+  default: { create: jest.fn() },
+}));
+jest.mock("../rabbitmq/outbox", () => ({
+  publishToOutbox: jest.fn().mockResolvedValue("evt-1"),
+}));
+
 jest.mock("../utils/calculateTotalAmount");
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 const mockedService = processPaymentAndStoreDetailsService as jest.Mock;
-const mockedPublishEvent = publish as jest.Mock;
+const mockedPublishEvent = publishToOutbox as jest.Mock;
 const mockedCalculateTotalAmount = calculateTotalAmount as jest.Mock;
 
 describe("processPaymentAndStoreDetailsController", () => {
@@ -26,6 +35,12 @@ describe("processPaymentAndStoreDetailsController", () => {
   beforeEach(() => {
     // Reset mocks before each test
     jest.clearAllMocks();
+
+    // The controller wraps its outbox write in a transaction. Stub just that
+    // method - mocking the whole module would break Payment.init().
+    jest
+      .spyOn(connectdb, "transaction")
+      .mockImplementation((async (cb: any) => cb({})) as any);
 
     // Mock request and response objects
     req = {
@@ -93,7 +108,8 @@ describe("processPaymentAndStoreDetailsController", () => {
     expect(res.json).toHaveBeenCalledWith({ status: "success" });
     expect(mockedPublishEvent).toHaveBeenCalledWith(
       EventType.PAYMENT_SUCCEEDED,
-      { orderId: "123", userId: "user1", items: req.body.items }
+      { orderId: "123", userId: "user1", items: req.body.items },
+      expect.anything() // transaction - the event and the payment commit together
     );
   });
 
@@ -298,7 +314,8 @@ describe("processPaymentAndStoreDetailsController", () => {
     expect(res.json).toHaveBeenCalledWith({ status: "failed" });
     expect(mockedPublishEvent).toHaveBeenCalledWith(
       EventType.PAYMENT_FAILED,
-      { orderId: "123" }
+      { orderId: "123" },
+      expect.anything() // transaction
     );
   });
 

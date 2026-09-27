@@ -90,13 +90,16 @@ Verified live: `npm run smoke:all` (4 modes) plus 37 new unit tests.
       is published and the order hangs in `pending` forever.
 - [x] **Unique constraint** on `order_reservations (orderId, productId)`.
 
-## Phase 4 - Transactional outbox
+## Phase 4 - Transactional outbox (DONE)
 
-- [ ] **`outbox` table per service**, written in the same transaction as the domain change.
-- [ ] **Relay worker** polls unpublished rows, publishes, marks them sent. This is what
+Verified live with `npm run smoke:crash`: an outbox row written with no publish call
+anywhere in the process is picked up by the relay, published, and reaches its consumer.
+
+- [x] **`outbox` table per service**, written in the same transaction as the domain change.
+- [x] **Relay worker** polls unpublished rows, publishes, marks them sent. This is what
       makes "the DB changed" and "the event was published" one atomic fact.
-- [ ] Route every existing `publishEvent` call through the outbox.
-- [ ] Optional later: swap polling for logical replication / Debezium.
+- [x] Route every existing `publishEvent` call through the outbox.
+- [ ] Optional later: swap polling for logical replication / Debezium. Still polling.
 
 ## Phase 5 - Close the gap between the two chains
 

@@ -4,6 +4,8 @@ import Payment from "./model/payment.model";
 import router from "./routes";
 import logger from "./utils/logger";
 import { closeBroker } from "./rabbitmq/connection";
+import OutboxEvent from "./model/outbox.model";
+import { startOutboxRelay, stopOutboxRelay } from "./rabbitmq/outbox";
 
 const app = express();
 (async () => {
@@ -12,6 +14,9 @@ const app = express();
     logger.info("Connection successful");
     await Payment.sync({ alter: true });
     logger.info("Payment table synced");
+    await OutboxEvent.sync({ alter: true });
+    logger.info("Outbox table synced");
+    startOutboxRelay();
   } catch (error) {
     logger.error("Error:", error);
     process.exit(1);
@@ -35,6 +40,7 @@ if (process.env.NODE_ENV !== "test") {
 async function shutdown(signal: string) {
   logger.info(`${signal} received, shutting down`);
   try {
+    stopOutboxRelay();
     await closeBroker();
     await connectdb.close();
   } catch (error) {

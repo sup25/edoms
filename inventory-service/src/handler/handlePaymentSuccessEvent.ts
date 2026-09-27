@@ -2,7 +2,7 @@ import { QueryTypes } from "sequelize";
 import sequelize from "../config/db";
 import OrderReservation from "../model/orderReservation.model";
 import { EventType } from "@edoms/shared-events";
-import { publish } from "../rabbitmq/publisher";
+import { publishToOutbox } from "../rabbitmq/outbox";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import { processOnce } from "../utils/idempotency";
 import type { EventMeta } from "../rabbitmq/subscriber";
@@ -64,19 +64,22 @@ export async function handlePaymentSuccessEvent(
         `No pending reservations to confirm for order ${orderId} ` +
           `(already confirmed, or cancelled by a prior failure)`
       );
+      return;
     }
+
+    // Same transaction as the status change.
+    await publishToOutbox(
+      EventType.RESERVATION_CONFIRMED,
+      { orderId, confirmedAt: new Date().toISOString() },
+      transaction,
+      { correlationId, causationId }
+    );
   });
 
   if (confirmed > 0) {
     logger.info(`Confirmed ${confirmed} reservation(s) for order ${orderId}`);
-    await publish(
-      EventType.RESERVATION_CONFIRMED,
-      { orderId, confirmedAt: new Date().toISOString() },
-      { correlationId, causationId }
-    );
   }
 }
-
 export async function startPaymentSuccessEventService() {
   await subscribeEvent(
     EventType.PAYMENT_SUCCEEDED,

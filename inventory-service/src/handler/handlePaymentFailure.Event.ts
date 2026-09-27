@@ -3,7 +3,7 @@ import sequelize from "../config/db";
 import OrderReservation from "../model/orderReservation.model";
 import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
-import { publish } from "../rabbitmq/publisher";
+import { publishToOutbox } from "../rabbitmq/outbox";
 import { processOnce } from "../utils/idempotency";
 import type { EventMeta } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
@@ -88,27 +88,25 @@ export async function handlePaymentFailureEvent(
         }
       );
 
+      // Written in the same transaction as the stock restore.
+      await publishToOutbox(
+        EventType.RESERVATION_RELEASED,
+        {
+          orderId,
+          productId,
+          rolledBackQuantity: reservedQuantity,
+          failedAt: new Date().toISOString(),
+        },
+        transaction,
+        { correlationId, causationId }
+      );
+
       released.push({ productId, quantity: reservedQuantity });
       logger.info(
         `Released ${reservedQuantity} unit(s) of product ${productId} for order ${orderId}`
       );
     }
   });
-
-  // Published after commit so consumers never see an event for work that was
-  // rolled back.
-  for (const item of released) {
-    await publish(
-      EventType.RESERVATION_RELEASED,
-      {
-        orderId,
-        productId: item.productId,
-        rolledBackQuantity: item.quantity,
-        failedAt: new Date().toISOString(),
-      },
-      { correlationId, causationId }
-    );
-  }
 
   if (released.length === 0) {
     logger.info(

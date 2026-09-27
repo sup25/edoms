@@ -2,7 +2,7 @@ import { QueryTypes } from "sequelize";
 import sequelize from "../config/db";
 import OrderReservation from "../model/orderReservation.model";
 import { EventType } from "@edoms/shared-events";
-import { publish } from "../rabbitmq/publisher";
+import { publishToOutbox } from "../rabbitmq/outbox";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import { processOnce } from "../utils/idempotency";
 import type { EventMeta } from "../rabbitmq/subscriber";
@@ -97,6 +97,18 @@ export async function handleOrderReservationEvent(
         { transaction }
       );
 
+      /*
+       * The event is written to the outbox in the SAME transaction as the
+       * stock decrement, so "stock was reserved" and "the event exists"
+       * commit together. A crash here rolls back both.
+       */
+      await publishToOutbox(
+        EventType.STOCK_RESERVED,
+        { productId, orderId, quantity },
+        transaction,
+        { correlationId, causationId }
+      );
+
       reserved.push(item);
     }
 
@@ -119,31 +131,29 @@ export async function handleOrderReservationEvent(
       `Insufficient stock for order ${orderId}: product ${detail.productId} ` +
         `wanted ${detail.requested}. Nothing reserved.`
     );
-    await publish(
-      EventType.RESERVATION_FAILED,
-      {
-        orderId,
-        productId: detail.productId,
-        requestedQuantity: detail.requested,
-        reason: "insufficient_stock",
-        failedAt: new Date().toISOString(),
-      },
-      { correlationId, causationId }
+    /*
+     * The reservation transaction rolled back, so there is no domain change to
+     * pair this with - but the event still must not be lost, or the order
+     * hangs pending forever. It gets a transaction of its own.
+     */
+    await sequelize.transaction(async (transaction) =>
+      publishToOutbox(
+        EventType.RESERVATION_FAILED,
+        {
+          orderId,
+          productId: detail.productId,
+          requestedQuantity: detail.requested,
+          reason: "insufficient_stock",
+          failedAt: new Date().toISOString(),
+        },
+        transaction,
+        { correlationId, causationId }
+      )
     );
     return;
   }
 
-  for (const item of reserved) {
-    await publish(
-      EventType.STOCK_RESERVED,
-      { productId: item.productId, orderId, quantity: item.quantity },
-      { correlationId, causationId }
-    );
-  }
-
-  logger.info(
-    `Reserved ${reserved.length} item(s) for order ${orderId}`
-  );
+  logger.info(`Reserved ${reserved.length} item(s) for order ${orderId}`);
 }
 
 /** Internal signal used to roll the reservation transaction back. */
