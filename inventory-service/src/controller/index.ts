@@ -8,7 +8,8 @@ import {
   getProductStockById,
   updateProductStockService,
 } from "../service";
-import { publishEvent } from "../rabbitmq/publisher";
+import { EventType } from "@edoms/shared-events";
+import { publish } from "../rabbitmq/publisher";
 
 export const getProductStockController = expressAsyncHandler(
   async (req: Request, res: Response) => {
@@ -63,15 +64,10 @@ export const updateProductStockController = expressAsyncHandler(
     const { id, stock } = req.body;
     try {
       const updatedStock = await updateProductStockService({ id, stock });
-      await publishEvent(
-        "inventory_service",
-        "stock_updated",
-        "Stock Updated",
-        {
-          productId: id,
-          stock: stock,
-        }
-      );
+      await publish(EventType.STOCK_UPDATED, {
+        productId: id,
+        stock: stock,
+      });
       res.status(STATUS_CODES.OK).json({
         success: true,
         message: "product Stock updated successfully",

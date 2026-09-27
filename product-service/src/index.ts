@@ -3,7 +3,9 @@ import express from "express";
 import Product from "./model/product.model";
 import router from "./routes";
 
+import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "./rabbitmq/subscriber";
+import redis from "./utils/redis";
 import { startStockDecrementEventService } from "./handler/handleStockDecrementEvent";
 import { startStockRollBackEventService } from "./handler/handleStockRollBackEvent";
 import logger from "./utils/logger";
@@ -23,17 +25,19 @@ const app = express();
 })();
 
 /*
- * Subscribe to stock_updated. This currently only logs.
- * TODO (Phase 2, docs/ROADMAP.md): an admin stock update leaves the Redis
- * `stock:<id>` cache in this service stale. This handler should invalidate it.
+ * An admin stock update used to leave this service's Redis cache stale: the
+ * event arrived and was only logged (defect #2). It now invalidates the entry
+ * so the next read re-fetches.
  */
 async function startService() {
-  await subscribeEvent(
-    "inventory_service",
-    "stock_updated",
-    "direct",
-    async (eventType: string, data: any) => {
-      logger.info(`Received event: ${eventType}`, data);
+  await subscribeEvent<{ productId: number; stock: number }>(
+    EventType.STOCK_UPDATED,
+    async (payload, meta) => {
+      logger.info(`Received ${EventType.STOCK_UPDATED}`, {
+        correlationId: meta.correlationId,
+      });
+      await redis.setex(`stock:${payload.productId}`, 300, String(payload.stock));
+      logger.info(`Cache refreshed for product ${payload.productId}`);
     },
     { queue: "product-service.stock-updated" }
   );

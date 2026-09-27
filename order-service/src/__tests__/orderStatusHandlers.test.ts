@@ -30,7 +30,7 @@ describe("handleOrderConfirmedEvent", () => {
     const order = pendingOrder();
     mockedFindByPk.mockResolvedValue(order);
 
-    await handleOrderConfirmedEvent("order confirmed", {
+    await handleOrderConfirmedEvent({
       orderId: 1,
       confirmedAt: new Date().toISOString(),
     });
@@ -42,7 +42,7 @@ describe("handleOrderConfirmedEvent", () => {
     const order = { id: 1, status: "confirmed", update: jest.fn() };
     mockedFindByPk.mockResolvedValue(order);
 
-    await handleOrderConfirmedEvent("order confirmed", { orderId: 1, confirmedAt: "" });
+    await handleOrderConfirmedEvent({ orderId: 1, confirmedAt: "" });
 
     expect(order.update).not.toHaveBeenCalled();
   });
@@ -50,7 +50,7 @@ describe("handleOrderConfirmedEvent", () => {
   it("does nothing when the order is missing", async () => {
     mockedFindByPk.mockResolvedValue(null);
     await expect(
-      handleOrderConfirmedEvent("order confirmed", { orderId: 999, confirmedAt: "" })
+      handleOrderConfirmedEvent({ orderId: 999, confirmedAt: "" })
     ).resolves.toBeUndefined();
   });
 });
@@ -60,7 +60,7 @@ describe("handleOrderFailureEvent", () => {
     const order = pendingOrder();
     mockedFindByPk.mockResolvedValue(order);
 
-    await handleOrderFailureEvent("order failed", {
+    await handleOrderFailureEvent({
       orderId: 1,
       confirmedAt: new Date().toISOString(),
     });
@@ -72,7 +72,7 @@ describe("handleOrderFailureEvent", () => {
     const order = pendingOrder();
     mockedFindByPk.mockResolvedValue(order);
 
-    await handleOrderFailureEvent("order failed", { orderId: 42, confirmedAt: "" });
+    await handleOrderFailureEvent({ orderId: 42, confirmedAt: "" });
 
     // The regression: inventory used to publish this event WITHOUT orderId,
     // so findByPk received undefined and the order stayed pending forever.
@@ -84,7 +84,7 @@ describe("handleOrderFailureEvent", () => {
     const order = { id: 1, status: "confirmed", update: jest.fn() };
     mockedFindByPk.mockResolvedValue(order);
 
-    await handleOrderFailureEvent("order failed", { orderId: 1, confirmedAt: "" });
+    await handleOrderFailureEvent({ orderId: 1, confirmedAt: "" });
 
     expect(order.update).not.toHaveBeenCalled();
   });
@@ -95,7 +95,7 @@ describe("handleReservationFailedEvent", () => {
     const order = pendingOrder();
     mockedFindByPk.mockResolvedValue(order);
 
-    await handleReservationFailedEvent("reservation failed", {
+    await handleReservationFailedEvent({
       orderId: 1,
       productId: 5,
       requestedQuantity: 99,
@@ -109,18 +109,14 @@ describe("handleReservationFailedEvent", () => {
     const order = { id: 1, status: "failed", update: jest.fn() };
     mockedFindByPk.mockResolvedValue(order);
 
-    await handleReservationFailedEvent("reservation failed", { orderId: 1 });
+    await handleReservationFailedEvent({ orderId: 1 });
 
     expect(order.update).not.toHaveBeenCalled();
   });
 
   it("ignores an event with no orderId", async () => {
-    await handleReservationFailedEvent("reservation failed", {} as any);
+    await handleReservationFailedEvent({} as any);
     expect(mockedFindByPk).not.toHaveBeenCalled();
   });
 
-  it("ignores an unrelated event type", async () => {
-    await handleReservationFailedEvent("something else", { orderId: 1 });
-    expect(mockedFindByPk).not.toHaveBeenCalled();
-  });
 });

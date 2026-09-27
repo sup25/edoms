@@ -1,6 +1,5 @@
 import expressAsyncHandler from "express-async-handler";
 import axios from "axios";
-import Redis from "ioredis";
 import { Request, Response } from "express";
 import { STATUS_CODES } from "../constants";
 import {
@@ -8,11 +7,12 @@ import {
   getOrderDetailsByIdService,
   getOrderStatusByIdService,
 } from "../service";
-import { publishEvent } from "../rabbitmq/publisher";
+import { randomUUID } from "crypto";
+import { EventType } from "@edoms/shared-events";
+import { publish } from "../rabbitmq/publisher";
 import { PRODUCT_SERVICE_URL, STOCK_SERVICE_URL } from "../config/apiEndpoints";
 import logger from "../utils/logger";
-
-const redis = new Redis();
+import redis from "../utils/redis";
 
 interface OrderItem {
   productId: number;
@@ -189,12 +189,11 @@ export const createOrderController = expressAsyncHandler(
         totalAmount: result.order.totalAmount,
       };
 
-      await publishEvent(
-        "order_service",
-        "create_order",
-        "order_created",
-        eventData
-      );
+      // The correlationId is minted here, at the start of the business
+      // transaction, and every downstream event carries it.
+      await publish(EventType.ORDER_CREATED, eventData, {
+        correlationId: randomUUID(),
+      });
 
       // Step 6: Send success response
       res.status(STATUS_CODES.CREATED).json({

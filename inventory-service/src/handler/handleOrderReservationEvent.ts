@@ -1,9 +1,11 @@
 import { QueryTypes } from "sequelize";
 import sequelize from "../config/db";
 import OrderReservation from "../model/orderReservation.model";
-import { publishEvent } from "../rabbitmq/publisher";
+import { EventType } from "@edoms/shared-events";
+import { publish } from "../rabbitmq/publisher";
 import { subscribeEvent } from "../rabbitmq/subscriber";
-import { processOnce, EventMeta } from "../utils/idempotency";
+import { processOnce } from "../utils/idempotency";
+import type { EventMeta } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
 
 interface OrderItem {
@@ -33,16 +35,12 @@ const CONSUMER = "inventory.order-created";
  * - wrapped in processOnce, so a redelivery does not decrement twice
  */
 export async function handleOrderReservationEvent(
-  eventType: string,
   event: OrderCreatedEvent,
   meta?: EventMeta
 ) {
-  if (eventType !== "order_created") {
-    logger.error(`Unhandled event type: ${eventType}`);
-    return;
-  }
-
   const { orderId, items } = event;
+  const correlationId = meta?.correlationId;
+  const causationId = meta?.causationId;
 
   if (!orderId || !Array.isArray(items) || items.length === 0) {
     logger.error(`Malformed order_created event for order ${orderId}`);
@@ -53,7 +51,7 @@ export async function handleOrderReservationEvent(
   let shortfall: { productId: number; requested: number } | null = null;
   let reserved: OrderItem[] = [];
 
-  await processOnce(CONSUMER, eventType, meta, async (transaction) => {
+  await processOnce(CONSUMER, EventType.ORDER_CREATED, meta, async (transaction) => {
     shortfall = null;
     reserved = [];
 
@@ -121,25 +119,26 @@ export async function handleOrderReservationEvent(
       `Insufficient stock for order ${orderId}: product ${detail.productId} ` +
         `wanted ${detail.requested}. Nothing reserved.`
     );
-    await publishEvent(
-      "inventory_service",
-      "reservation_failed",
-      "reservation failed",
+    await publish(
+      EventType.RESERVATION_FAILED,
       {
         orderId,
         productId: detail.productId,
         requestedQuantity: detail.requested,
         reason: "insufficient_stock",
         failedAt: new Date().toISOString(),
-      }
+      },
+      { correlationId, causationId }
     );
     return;
   }
 
   for (const item of reserved) {
-    await publishEvent("inventory_service", "stock_decrement", "Stock Decrement", {
-      productId: item.productId,
-    });
+    await publish(
+      EventType.STOCK_RESERVED,
+      { productId: item.productId, orderId, quantity: item.quantity },
+      { correlationId, causationId }
+    );
   }
 
   logger.info(
@@ -157,12 +156,12 @@ class InsufficientStock extends Error {
 
 export async function startOrderReservationEventService() {
   await subscribeEvent(
-    "order_service",
-    "create_order",
-    "direct",
-    async (eventType: string, data: any, meta) => {
-      logger.info(`Received event: ${eventType}`, data);
-      await handleOrderReservationEvent(eventType, data, meta);
+    EventType.ORDER_CREATED,
+    async (payload: any, meta) => {
+      logger.info(`Received ${EventType.ORDER_CREATED}`, {
+        correlationId: meta.correlationId,
+      });
+      await handleOrderReservationEvent(payload, meta);
     },
     { queue: "inventory-service.order-created" }
   );

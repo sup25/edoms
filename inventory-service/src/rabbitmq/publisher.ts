@@ -1,89 +1,99 @@
-import { randomUUID } from "crypto";
+import {
+  EventType,
+  EXCHANGE_FOR,
+  buildEnvelope,
+  validatePayload,
+} from "@edoms/shared-events";
 import { getPublishChannel } from "./connection";
-import type { ExchangeType } from "./topology";
 import logger from "../utils/logger";
 
+const PRODUCER = "inventory-service";
+
+export interface PublishOptions {
+  /** Ties this event to the business transaction that caused it. */
+  correlationId?: string;
+  /** eventId of the event being reacted to, if any. */
+  causationId?: string;
+  maxRetries?: number;
+  retryDelay?: number;
+}
+
 /**
- * Publishes an event to a RabbitMQ exchange.
+ * Publishes a domain event.
  *
- * Durability guarantees (Phase 1):
- * - reuses one long-lived connection instead of dialling per publish
- * - messages are marked persistent so they survive a broker restart
- * - uses a confirm channel and waits for the broker ack, so this resolves only
- *   once the broker has actually taken responsibility for the message
+ * Phase 2: the caller names the event and nothing else. The exchange and
+ * routing key are derived from the shared catalogue, so a publisher and a
+ * consumer can no longer disagree about where an event lives - which is
+ * exactly how the `invetory_service` typo went unnoticed.
  *
- * @param exchangeName - The exchange to publish to.
- * @param routingKey - The routing key (use "" for fanout).
- * @param eventType - The type of event (e.g. "order_created").
- * @param data - The event payload.
- * @param exchangeType - The type of exchange (default: "direct").
- * @param maxRetries - Number of retry attempts (default: 3).
- * @param retryDelay - Delay between retries in ms (default: 1000).
+ * The payload is validated before it leaves the process, so a malformed event
+ * fails here, at its source, rather than in a consumer three services away.
  */
-export async function publishEvent(
-  exchangeName: string,
-  routingKey: string,
-  eventType: string,
-  data: any,
-  exchangeType: ExchangeType = "direct",
-  maxRetries: number = 3,
-  retryDelay: number = 1000
-): Promise<void> {
-  if (maxRetries === 0) {
-    logger.warn(`Publishing ${eventType} skipped due to maxRetries = 0`);
-    return;
+export async function publish<T>(
+  eventType: EventType,
+  payload: T,
+  options: PublishOptions = {}
+): Promise<string> {
+  const { correlationId, causationId, maxRetries = 3, retryDelay = 1000 } = options;
+
+  const exchange = EXCHANGE_FOR[eventType];
+  if (!exchange) {
+    throw new Error(`No exchange registered for event type ${eventType}`);
   }
 
-  const messageId = randomUUID();
-  const payload = Buffer.from(JSON.stringify({ event: eventType, data }));
+  // Fail fast at the producer rather than dead-lettering at the consumer.
+  validatePayload(eventType, payload);
+
+  const envelope = buildEnvelope(eventType, payload, {
+    producer: PRODUCER,
+    correlationId,
+    causationId,
+  });
+  const body = Buffer.from(JSON.stringify(envelope));
 
   let attempts = 0;
-
   while (attempts <= maxRetries) {
     try {
       const channel = await getPublishChannel();
-      await channel.assertExchange(exchangeName, exchangeType, {
-        durable: true,
-      });
+      await channel.assertExchange(exchange, "topic", { durable: true });
 
-      // Resolves when the broker confirms the message, rejects if it is lost.
       await new Promise<void>((resolve, reject) => {
         channel.publish(
-          exchangeName,
-          routingKey,
-          payload,
+          exchange,
+          eventType, // routing key IS the event name
+          body,
           {
             persistent: true,
             contentType: "application/json",
-            messageId,
+            messageId: envelope.eventId,
+            correlationId: envelope.correlationId,
             timestamp: Date.now(),
             type: eventType,
+            appId: PRODUCER,
           },
           (error) => (error ? reject(error) : resolve())
         );
       });
 
-      logger.info(`Event published: ${eventType}`, {
-        messageId,
-        exchangeName,
-        routingKey,
+      logger.info(`Published ${eventType}`, {
+        eventId: envelope.eventId,
+        correlationId: envelope.correlationId,
+        exchange,
       });
-      return;
+      return envelope.eventId;
     } catch (error: unknown) {
       attempts++;
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
 
       if (attempts > maxRetries) {
-        logger.error(
-          `Failed to publish ${eventType} after ${maxRetries} retries`,
-          error
-        );
-        throw new Error(`Failed to publish ${eventType}: ${errorMessage}`);
+        logger.error(`Failed to publish ${eventType} after ${maxRetries} retries`, error);
+        throw new Error(`Failed to publish ${eventType}: ${message}`);
       }
 
       logger.warn(`Retry ${attempts}/${maxRetries} for ${eventType}`, error);
-      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      await new Promise((r) => setTimeout(r, retryDelay));
     }
   }
+
+  throw new Error(`Failed to publish ${eventType}`);
 }

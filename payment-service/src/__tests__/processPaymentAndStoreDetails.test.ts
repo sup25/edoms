@@ -3,7 +3,8 @@ import { Request, Response } from "express";
 import axios from "axios";
 import { processPaymentAndStoreDetailsController } from "../controller";
 import { processPaymentAndStoreDetailsService } from "../service";
-import { publishEvent } from "../rabbitmq/publisher";
+import { EventType } from "@edoms/shared-events";
+import { publish } from "../rabbitmq/publisher";
 import { calculateTotalAmount } from "../utils/calculateTotalAmount";
 import { STATUS_CODES } from "../constants";
 
@@ -15,7 +16,7 @@ jest.mock("../utils/calculateTotalAmount");
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 const mockedService = processPaymentAndStoreDetailsService as jest.Mock;
-const mockedPublishEvent = publishEvent as jest.Mock;
+const mockedPublishEvent = publish as jest.Mock;
 const mockedCalculateTotalAmount = calculateTotalAmount as jest.Mock;
 
 describe("processPaymentAndStoreDetailsController", () => {
@@ -91,9 +92,7 @@ describe("processPaymentAndStoreDetailsController", () => {
     // Assert
     expect(res.json).toHaveBeenCalledWith({ status: "success" });
     expect(mockedPublishEvent).toHaveBeenCalledWith(
-      "payment_service",
-      "payment_success",
-      "payment_success",
+      EventType.PAYMENT_SUCCEEDED,
       { orderId: "123", userId: "user1", items: req.body.items }
     );
   });
@@ -298,9 +297,7 @@ describe("processPaymentAndStoreDetailsController", () => {
     // Assert
     expect(res.json).toHaveBeenCalledWith({ status: "failed" });
     expect(mockedPublishEvent).toHaveBeenCalledWith(
-      "payment_service",
-      "payment_failure",
-      "payment_failure",
+      EventType.PAYMENT_FAILED,
       { orderId: "123" }
     );
   });

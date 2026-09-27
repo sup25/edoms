@@ -1,0 +1,27 @@
+{
+  "name": "@edoms/shared-events",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared event contract for EDOMS: envelope, event names, payload schemas, and the AMQP topology map.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "test": "jest"
+  },
+  "dependencies": {
+    "edoms": "file:../..",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.20.4",
+    "jest": "^30.5.2",
+    "ts-jest": "^29.4.14",
+    "typescript": "^5.8.2"
+  }
+}

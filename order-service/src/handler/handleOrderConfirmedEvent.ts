@@ -1,4 +1,5 @@
 import Order from "../model/order.model";
+import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
 
@@ -8,13 +9,11 @@ interface OrderConfirmedEvent {
 }
 
 export async function handleOrderConfirmedEvent(
-  eventType: string,
   event: OrderConfirmedEvent
 ): Promise<void> {
   try {
-    if (eventType === "order confirmed") {
+    {
       logger.info("Processing order event:", event);
-      logger.info("Event type:", eventType);
       const { orderId, confirmedAt } = event;
       logger.info(
         `Processing order_confirmed event for orderId: ${orderId}, confirmed at: ${confirmedAt}`
@@ -35,8 +34,6 @@ export async function handleOrderConfirmedEvent(
 
       await order.update({ status: "confirmed" });
       logger.info(`Order with ID ${orderId} status updated to 'confirmed'`);
-    } else {
-      logger.error("Invalid event type:", eventType);
     }
   } catch (error) {
     logger.error("Error handling order_confirmed event:", error);
@@ -46,12 +43,12 @@ export async function handleOrderConfirmedEvent(
 
 export async function startOrderConfirmEventService() {
   await subscribeEvent(
-    "inventory_service",
-    "order_confirmed",
-    "direct",
-    async (eventType: string, data: any) => {
-      logger.info(`Received event: ${eventType}`, data);
-      await handleOrderConfirmedEvent(eventType, data);
+    EventType.RESERVATION_CONFIRMED,
+    async (payload: any, meta) => {
+      logger.info(`Received ${EventType.RESERVATION_CONFIRMED}`, {
+        correlationId: meta.correlationId,
+      });
+      await handleOrderConfirmedEvent(payload);
     },
     { queue: "order-service.order-confirmed" }
   );

@@ -40,35 +40,31 @@ const URL = process.env.BROKER_URL || "amqp://localhost:5672";
 const SHOW_PAYLOADS = process.argv.includes("--payloads");
 
 /*
- * The current topology. These are `direct` exchanges, so routing keys have to
- * be listed explicitly - there is no wildcard bind.
- * Phase 2 moves to topic exchanges, after which this becomes a single "#".
+ * Topic exchanges, one per producing domain. Because they are topic (not
+ * direct) exchanges, a single "#" binding catches every event in the domain -
+ * no more listing each routing key by hand, and new events show up here
+ * automatically.
  */
-const TOPOLOGY = {
-  product_service: ["product_created", "product_deleted"],
-  order_service: ["create_order"],
-  inventory_service: [
-    "stock_decrement",
-    "stock_updated",
-    "order_confirmed",
-    "order_failed",
-  ],
-  payment_service: ["payment_success", "payment_failure"],
-  "product.events": ["product.updated"],
-};
+const EXCHANGES = [
+  "product.events",
+  "order.events",
+  "inventory.events",
+  "payment.events",
+];
 
 /* Where each event goes next, so the trace reads as a story. */
 const CONSUMERS = {
-  product_created: "-> inventory initializes stock",
-  product_deleted: "-> inventory deletes stock + reservations",
-  create_order: "-> inventory reserves stock",
-  stock_decrement: "-> product refreshes Redis cache",
-  stock_updated: "-> product (logs only; see Phase 2)",
-  order_confirmed: "-> order marks CONFIRMED",
-  order_failed: "-> order marks FAILED, product rolls back cache",
-  payment_success: "-> inventory confirms reservation",
-  payment_failure: "-> inventory releases stock",
-  "product.updated": "-> NOBODY (orphan event, see Phase 2)",
+  "product.created": "-> inventory initializes stock",
+  "product.updated": "-> order invalidates its product cache",
+  "product.deleted": "-> inventory deletes stock, order drops its cache",
+  "order.created": "-> inventory reserves stock",
+  "inventory.stock.reserved": "-> product refreshes Redis cache",
+  "inventory.stock.updated": "-> product invalidates its stock cache",
+  "inventory.reservation.confirmed": "-> order marks CONFIRMED",
+  "inventory.reservation.released": "-> order marks FAILED, product rolls back cache",
+  "inventory.reservation.failed": "-> order marks FAILED (insufficient stock)",
+  "payment.succeeded": "-> inventory confirms reservation",
+  "payment.failed": "-> inventory releases stock",
 };
 
 const COLORS = {
@@ -92,18 +88,13 @@ async function main() {
   const connection = await amqplib.connect(URL);
   const channel = await connection.createChannel();
 
-  for (const [exchange, routingKeys] of Object.entries(TOPOLOGY)) {
-    // passive:false so the tracer works even before a service has started and
-    // declared the exchange itself.
-    await channel.assertExchange(exchange, "direct", { durable: true });
+  for (const exchange of EXCHANGES) {
+    await channel.assertExchange(exchange, "topic", { durable: true });
 
-    // Transient queue: exclusive + autoDelete is correct HERE because this is a
-    // debug tap, not a real consumer. It disappears when the tracer stops.
+    // Transient queue: exclusive + autoDelete is correct HERE because this is
+    // a debug tap, not a real consumer. It disappears when the tracer stops.
     const q = await channel.assertQueue("", { exclusive: true, autoDelete: true });
-
-    for (const key of routingKeys) {
-      await channel.bindQueue(q.queue, exchange, key);
-    }
+    await channel.bindQueue(q.queue, exchange, "#");
 
     await channel.consume(
       q.queue,
@@ -115,27 +106,31 @@ async function main() {
         const routingKey = msg.fields.routingKey;
         const next = CONSUMERS[routingKey] || "";
 
-        let eventType = "?";
+        let eventType = routingKey;
         let payload;
+        let correlationId = "";
         try {
           const parsed = JSON.parse(msg.content.toString());
-          eventType = parsed.event;
-          payload = parsed.data;
+          // Phase 2 envelope, with a fallback for anything still using the
+          // old { event, data } shape.
+          eventType = parsed.eventType || parsed.event || routingKey;
+          payload = parsed.payload !== undefined ? parsed.payload : parsed.data;
+          correlationId = parsed.correlationId || msg.properties.correlationId || "";
         } catch {
           eventType = "<malformed>";
           payload = msg.content.toString().slice(0, 200);
         }
 
+        const corr = correlationId ? `${DIM}[${correlationId.slice(0, 8)}]${RESET} ` : "";
         console.log(
-          `${DIM}${stamp()}${RESET} ${color}${BOLD}${exchange}${RESET}` +
-            `${DIM}/${routingKey}${RESET}  ${BOLD}${eventType}${RESET}  ${DIM}${next}${RESET}`
+          `${DIM}${stamp()}${RESET} ${corr}${color}${BOLD}${eventType}${RESET}  ${DIM}${next}${RESET}`
         );
 
         if (SHOW_PAYLOADS) {
           const text = JSON.stringify(payload, null, 2) || String(payload);
           console.log(
             text
-              .split("\n")
+              .split(/\r?\n/)
               .map((l) => `${DIM}          ${l}${RESET}`)
               .join("\n")
           );
@@ -147,10 +142,9 @@ async function main() {
     );
   }
 
-  const bindings = Object.values(TOPOLOGY).flat().length;
   console.log(
-    `${BOLD}EDOMS event tracer${RESET} - watching ${bindings} routing keys across ` +
-      `${Object.keys(TOPOLOGY).length} exchanges`
+    `${BOLD}EDOMS event tracer${RESET} - watching ALL events across ` +
+      `${EXCHANGES.length} topic exchanges`
   );
   console.log(
     `${DIM}Receives copies only; real consumers are unaffected. Ctrl+C to stop.` +

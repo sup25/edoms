@@ -5,6 +5,7 @@ import router from "./routes";
 import { startOrderConfirmEventService } from "./handler/handleOrderConfirmedEvent";
 import { startOrderFailureEventService } from "./handler/handlerOrderFailureEvent";
 import { startReservationFailedEventService } from "./handler/handleReservationFailedEvent";
+import { startProductCacheInvalidationService } from "./handler/handleProductCacheInvalidation";
 import logger from "./utils/logger";
 import { closeBroker } from "./rabbitmq/connection";
 
@@ -23,6 +24,7 @@ const app = express();
 startOrderConfirmEventService();
 startOrderFailureEventService();
 startReservationFailedEventService();
+startProductCacheInvalidationService();
 
 app.use(express.json());
 app.use("/api/v1", router);

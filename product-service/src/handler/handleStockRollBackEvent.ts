@@ -1,5 +1,6 @@
 import axios from "axios";
 import redis from "../utils/redis";
+import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import { INVENTORY_SERVICE_URL } from "../config/apiEndpoints";
 import logger from "../utils/logger";
@@ -8,14 +9,10 @@ import logger from "../utils/logger";
  * Subscribes to the `order_failed` event to rollback the Redis cache with the latest stock value for a product.
  *
  */
-export async function handleStockRollBack(eventType: string, event: any) {
-  if (eventType === "order failed") {
+export async function handleStockRollBack(event: any) {
+  {
     const { productId } = event;
 
-    if (eventType !== "order failed") {
-      logger.warn(`Unexpected event type: ${eventType}`);
-      return;
-    }
 
     try {
       // Validate productId
@@ -48,12 +45,13 @@ export async function handleStockRollBack(eventType: string, event: any) {
 
 export async function startStockRollBackEventService() {
   await subscribeEvent(
-    "inventory_service",
-    "order_failed",
-    "direct",
-    async (eventType: string, data: any) => {
-      await handleStockRollBack(eventType, data);
+    EventType.RESERVATION_RELEASED,
+    async (payload: any, meta) => {
+      logger.info(`Received ${EventType.RESERVATION_RELEASED}`, {
+        correlationId: meta.correlationId,
+      });
+      await handleStockRollBack(payload);
     },
-    { queue: "product-service.order-failed" }
+    { queue: "product-service.reservation-released" }
   );
 }

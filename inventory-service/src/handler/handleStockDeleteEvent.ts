@@ -1,15 +1,11 @@
 import Stock from "../model/stock.model";
 import OrderReservation from "../model/orderReservation.model";
+import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
 
-export async function handleStockDelete(eventType: string, event: any) {
+export async function handleStockDelete(event: any) {
   try {
-    if (eventType !== "product deleted") {
-      logger.error("⚠️ Invalid event type received:", eventType);
-      return;
-    }
-
     const productId = event?.id;
     if (!productId) {
       logger.error("❌ Missing product ID in event data:", event);
@@ -47,12 +43,12 @@ export async function handleStockDelete(eventType: string, event: any) {
 export async function startProductStockDeletionEventService() {
   try {
     await subscribeEvent(
-      "product_service",
-      "product_deleted",
-      "direct",
-      async (eventType: string, data: any) => {
-        logger.info(` Received event: ${eventType}`, data);
-        await handleStockDelete(eventType, data);
+      EventType.PRODUCT_DELETED,
+      async (payload: any, meta) => {
+        logger.info(`Received ${EventType.PRODUCT_DELETED}`, {
+          correlationId: meta.correlationId,
+        });
+        await handleStockDelete(payload);
       },
       { queue: "inventory-service.product-deleted" }
     );

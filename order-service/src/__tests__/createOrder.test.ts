@@ -6,7 +6,7 @@ import express, { Express } from "express";
 import { createOrderController } from "../controller";
 import axios from "axios";
 import { createOrderService } from "../service";
-import { publishEvent } from "../rabbitmq/publisher";
+import { publish } from "../rabbitmq/publisher";
 import { STATUS_CODES } from "../constants";
 import { requireUser } from "../middleware/ValidateUser";
 import { validate } from "../middleware/validateRequest";
@@ -19,6 +19,10 @@ jest.mock("ioredis", () => {
   const MockRedis = jest.fn().mockImplementation(() => ({
     get: mockRedisGet,
     set: mockRedisSet,
+    del: jest.fn().mockResolvedValue(1),
+    setex: jest.fn().mockResolvedValue("OK"),
+    // utils/redis.ts attaches error/connect listeners at module load
+    on: jest.fn(),
   }));
   return MockRedis;
 });
@@ -130,7 +134,7 @@ describe("createOrder", () => {
       createdAt: new Date().toISOString(), // Convert to string to match response
     };
     (createOrderService as jest.Mock).mockResolvedValue({ order: mockOrder });
-    (publishEvent as jest.Mock).mockResolvedValue(true);
+    (publish as jest.Mock).mockResolvedValue(true);
 
     const response = await request(app)
       .post("/createorder")
@@ -143,7 +147,7 @@ describe("createOrder", () => {
       data: mockOrder,
     });
     expect(mockRedisSet).toHaveBeenCalled();
-    expect(publishEvent).toHaveBeenCalled();
+    expect(publish).toHaveBeenCalled();
   });
 
   it("should return 400 when stock is insufficient", async () => {

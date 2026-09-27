@@ -48,23 +48,29 @@ Verified against a live broker with `node scripts/verify-messaging.js` (9/9 chec
 - [x] **Graceful shutdown** (pulled forward from Phase 7) - `SIGTERM`/`SIGINT` closes the
       broker connection and DB pool so in-flight messages are not abandoned.
 
-## Phase 2 - One event contract
+## Phase 2 - One event contract (DONE)
 
-- [ ] **Create `packages/shared-events`** (npm workspace or a private package) holding the
+See `docs/EVENTS.md`. Verified live: 13 subscriptions attach, `npm run smoke:all` green,
+correlationIds visible in `npm run trace`.
+
+- [x] **Create `packages/shared-events`** (npm workspace or a private package) holding the
       envelope, the event-name enum, and Zod schemas per event.
-- [ ] **Standard envelope** on every message:
+- [x] **Standard envelope** on every message:
       `{ eventId, eventType, eventVersion, occurredAt, correlationId, causationId, producer, payload }`.
-- [ ] **Rename every event to `<domain>.<thing>.<pastTense>`**: `order.created`,
+- [x] **Rename every event to `<domain>.<thing>.<pastTense>`**: `order.created`,
       `inventory.stock.reserved`, `inventory.reservation.failed`, `payment.succeeded`,
       `payment.failed`, `product.created`, `product.updated`, `product.deleted`. Kill
       `"Stock Decrement"`, `"order confirmed"`, `"product created"` and friends.
-- [ ] **Topic exchanges** (one per producing domain) with routing keys, instead of one
+- [x] **Topic exchanges** (one per producing domain) with routing keys, instead of one
       `direct` exchange per event.
-- [ ] **Validate on consume.** Reject a malformed event to the DLQ rather than letting it
+- [x] **Validate on consume.** Reject a malformed event to the DLQ rather than letting it
       throw inside business logic.
-- [ ] **Wire up the orphan.** `product.updated` is published to a `product.events`
-      exchange no one listens on - either give it a subscriber that invalidates the
-      product and stock caches, or delete it.
+- [x] **Wire up the orphan.** `product.updated` now has a consumer: order-service
+      invalidates its `product:<id>` cache, which it previously held for 10 minutes
+      while happily serving stale prices.
+- [x] **One-time broker migration** (`scripts/migrate-broker-phase2.js`) - RabbitMQ
+      refuses to redeclare an exchange with a different type, so the old `direct`
+      `product.events` had to be deleted before the topic version could be created.
 
 ## Phase 3 - Idempotency and correctness (DONE)
 
