@@ -11,6 +11,10 @@ import logger from "../utils/logger";
 interface OrderItem {
   productId: number;
   quantity: number;
+  /* Denormalised from order.created so the reservation event can carry them
+   * to payment, which must not have to call back over HTTP for prices. */
+  name?: string;
+  price?: number | string;
 }
 
 interface OrderCreatedEvent {
@@ -152,6 +156,30 @@ export async function handleOrderReservationEvent(
     );
     return;
   }
+
+  /*
+   * One event for the whole order, carrying everything payment needs.
+   * inventory.stock.reserved stays per-product for product-service's cache;
+   * this is the per-order signal that drives the saga forward.
+   */
+  await sequelize.transaction(async (transaction) =>
+    publishToOutbox(
+      EventType.ORDER_RESERVED,
+      {
+        orderId,
+        userId: event.userId,
+        items: reserved.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price ?? 0,
+          name: item.name,
+        })),
+        reservedAt: new Date().toISOString(),
+      },
+      transaction,
+      { correlationId, causationId }
+    )
+  );
 
   logger.info(`Reserved ${reserved.length} item(s) for order ${orderId}`);
 }

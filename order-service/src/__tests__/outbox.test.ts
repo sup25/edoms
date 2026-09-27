@@ -30,7 +30,10 @@ beforeEach(() => {
 });
 
 describe("publishToOutbox", () => {
-  const validOrder = { orderId: 1, items: [{ productId: 2, quantity: 3 }] };
+  const validOrder = {
+    orderId: 1,
+    items: [{ productId: 2, quantity: 3, price: "19.99" }],
+  };
 
   it("writes the row inside the caller's transaction", async () => {
     await publishToOutbox(EventType.ORDER_CREATED, validOrder, TX, {
@@ -89,7 +92,7 @@ describe("drainOutbox", () => {
     id: "1",
     event_id: "evt-abc",
     event_type: EventType.ORDER_CREATED,
-    payload: { orderId: 1, items: [{ productId: 2, quantity: 3 }] },
+    payload: { orderId: 1, items: [{ productId: 2, quantity: 3, price: "19.99" }] },
     correlation_id: "corr-1",
     causation_id: null,
     attempts: 0,

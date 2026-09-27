@@ -10,6 +10,9 @@ jest.mock("../config/db", () => ({
 jest.mock("../model/order.model", () => ({
   __esModule: true,
   default: { findByPk: jest.fn() },
+  // The handlers now gate on this instead of a bare 'pending' check.
+  IN_FLIGHT_STATUSES: ["pending", "reserved", "paid"],
+  ORDER_STATUS: ["pending", "reserved", "paid", "confirmed", "failed", "cancelled"],
 }));
 jest.mock("../rabbitmq/subscriber", () => ({ subscribeEvent: jest.fn() }));
 jest.mock("../utils/logger", () => ({

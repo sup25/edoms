@@ -1,34 +1,30 @@
-const mockRedisGet = jest.fn();
-const mockRedisSet = jest.fn();
-
 import request from "supertest";
 import express, { Express } from "express";
 import { createOrderController } from "../controller";
-import axios from "axios";
 import { createOrderService } from "../service";
 import { publishToOutbox } from "../rabbitmq/outbox";
+import ProductProjection from "../model/productProjection.model";
 import sequelize from "../config/db";
 import { STATUS_CODES } from "../constants";
 import { requireUser } from "../middleware/ValidateUser";
 import { validate } from "../middleware/validateRequest";
 import { CreateOrderRequestSchema } from "../validations/createorder.request.schema";
 
-// Mock dependencies
-jest.mock("axios");
 jest.mock("ioredis", () => {
-  // Mock Redis as a constructor function
   const MockRedis = jest.fn().mockImplementation(() => ({
-    get: mockRedisGet,
-    set: mockRedisSet,
+    get: jest.fn(),
+    set: jest.fn(),
     del: jest.fn().mockResolvedValue(1),
     setex: jest.fn().mockResolvedValue("OK"),
-    // utils/redis.ts attaches error/connect listeners at module load
     on: jest.fn(),
   }));
   return MockRedis;
 });
 jest.mock("../service");
-jest.mock("../rabbitmq/publisher");
+jest.mock("../model/productProjection.model", () => ({
+  __esModule: true,
+  default: { findByPk: jest.fn() },
+}));
 jest.mock("../model/outbox.model", () => ({
   __esModule: true,
   default: { create: jest.fn() },
@@ -41,39 +37,41 @@ jest.mock("../rabbitmq/outbox", () => ({
 jest.mock("../middleware/ValidateUser");
 jest.mock("../middleware/validateRequest");
 
+const mockedService = createOrderService as jest.Mock;
+const mockedProjection = ProductProjection.findByPk as unknown as jest.Mock;
+
+const PRODUCT = { productId: 1, name: "Product A", price: "10.00", slug: "prod-a" };
+
+const ORDER = {
+  id: 1,
+  userId: 1,
+  items: [{ productId: 1, quantity: 2, name: "Product A", price: "10.00" }],
+  status: "pending",
+  createdAt: new Date().toISOString(),
+  totalAmount: "20.00",
+};
+
 describe("createOrder", () => {
   let app: Express;
 
   beforeAll(() => {
-    // The controller wraps the order insert and the outbox write in one
-    // transaction. Stub just that method - mocking config/db wholesale would
-    // break Order.init(), which needs a real Sequelize instance.
+    // Stub only `transaction`; mocking config/db wholesale would break
+    // Order.init(), which needs a real Sequelize instance.
     jest
       .spyOn(sequelize, "transaction")
       .mockImplementation((async (cb: any) => cb({})) as any);
-  });
 
-  beforeAll(() => {
-    // Set up the Express app with the route
     app = express();
     app.use(express.json());
 
-    // Mock middleware to pass through
-    (requireUser as jest.Mock).mockImplementation((req, res, next) => {
-      req.user = { id: 1 }; // Mock a user object
+    (requireUser as jest.Mock).mockImplementation((req, _res, next) => {
+      req.user = { id: 1 };
       next();
     });
     (validate as jest.Mock).mockImplementation(
-      () =>
-        (
-          req: express.Request,
-          res: express.Response,
-          next: express.NextFunction
-        ) =>
-          next()
+      () => (_req: any, _res: any, next: any) => next()
     );
 
-    // Set up the route as specified
     app.post(
       "/createorder",
       requireUser,
@@ -84,162 +82,89 @@ describe("createOrder", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedProjection.mockResolvedValue(PRODUCT);
+    mockedService.mockResolvedValue({ success: true, order: ORDER });
   });
 
-  it("should return 400 for invalid userId", async () => {
-    const response = await request(app)
+  it("returns 400 for an invalid userId", async () => {
+    const res = await request(app)
       .post("/createorder")
-      .send({ userId: -1, items: [{ productId: 1, quantity: 1 }] });
+      .send({ userId: 0, items: [{ productId: 1, quantity: 2 }] });
 
-    expect(response.status).toBe(STATUS_CODES.BAD_REQUEST);
-    expect(response.body).toEqual({
-      success: false,
-      message: "Invalid user ID",
-      data: null,
-    });
+    expect(res.status).toBe(STATUS_CODES.BAD_REQUEST);
   });
 
-  it("should return 400 for invalid items array", async () => {
-    const response = await request(app)
+  it("returns 400 for an empty items array", async () => {
+    const res = await request(app).post("/createorder").send({ userId: 1, items: [] });
+    expect(res.status).toBe(STATUS_CODES.BAD_REQUEST);
+  });
+
+  it("returns 400 for a non-positive quantity", async () => {
+    const res = await request(app)
       .post("/createorder")
-      .send({ userId: 1, items: [] });
+      .send({ userId: 1, items: [{ productId: 1, quantity: 0 }] });
 
-    expect(response.status).toBe(STATUS_CODES.BAD_REQUEST);
-    expect(response.body).toEqual({
-      success: false,
-      message: "Items must be a non-empty array",
-      data: null,
-    });
+    expect(res.status).toBe(STATUS_CODES.BAD_REQUEST);
   });
 
-  it("should return 404 when product is not found", async () => {
-    mockRedisGet.mockResolvedValue(null);
-    (axios.get as jest.Mock).mockResolvedValue({
-      data: { success: false },
-    });
+  it("returns 404 when the product is not in the local projection", async () => {
+    mockedProjection.mockResolvedValue(null);
 
-    const response = await request(app)
+    const res = await request(app)
       .post("/createorder")
-      .send({ userId: 1, items: [{ productId: 1, quantity: 1 }] });
+      .send({ userId: 1, items: [{ productId: 99, quantity: 1 }] });
 
-    expect(response.status).toBe(STATUS_CODES.NOT_FOUND);
-    expect(response.body).toEqual({
-      success: false,
-      message: "Product with ID 1 not found",
-    });
+    expect(res.status).toBe(STATUS_CODES.NOT_FOUND);
   });
 
-  it("should create order successfully with valid data", async () => {
-    mockRedisGet.mockResolvedValue(null);
-    (axios.get as jest.Mock)
-      .mockResolvedValueOnce({
-        data: {
-          success: true,
-          data: { id: 1, name: "Test Product", price: 10 },
-        },
-      })
-      .mockResolvedValueOnce({
-        data: {
-          success: true,
-          data: [{ productId: 1, stock: 5 }],
-        },
-      });
-
-    const mockOrder = {
-      id: 1,
-      userId: 1,
-      status: "pending",
-      totalAmount: 20,
-      createdAt: new Date().toISOString(), // Convert to string to match response
-    };
-    (createOrderService as jest.Mock).mockResolvedValue({ order: mockOrder });
-    (publishToOutbox as jest.Mock).mockResolvedValue("evt-1");
-
-    const response = await request(app)
+  it("accepts a valid order with 202, not 201", async () => {
+    const res = await request(app)
       .post("/createorder")
       .send({ userId: 1, items: [{ productId: 1, quantity: 2 }] });
 
-    expect(response.status).toBe(STATUS_CODES.CREATED);
-    expect(response.body).toEqual({
-      success: true,
-      message: "Order created successfully",
-      data: mockOrder,
-    });
-    expect(mockRedisSet).toHaveBeenCalled();
-    // The order row and its event are written in ONE transaction (defect #10):
-    // the controller writes to the outbox, never straight to the broker.
+    // 202: the order has been taken on, not completed. Stock is not yet
+    // reserved and payment has not run.
+    expect(res.status).toBe(STATUS_CODES.ACCEPTED);
+    expect(res.body.data.statusUrl).toBe("/api/v1/orderStatus/1");
     expect(publishToOutbox).toHaveBeenCalled();
     expect(sequelize.transaction).toHaveBeenCalled();
   });
 
-  it("should return 400 when stock is insufficient", async () => {
-    mockRedisGet.mockResolvedValue(null);
-    (axios.get as jest.Mock)
-      .mockResolvedValueOnce({
-        data: {
-          success: true,
-          data: { id: 1, name: "Test Product", price: 10 },
-        },
-      })
-      .mockResolvedValueOnce({
-        data: {
-          success: true,
-          data: [{ productId: 1, stock: 5 }],
-        },
-      });
-
-    const response = await request(app)
+  it("prices the order from the LOCAL projection, with no HTTP call", async () => {
+    await request(app)
       .post("/createorder")
-      .send({ userId: 1, items: [{ productId: 1, quantity: 10 }] });
+      .send({ userId: 1, items: [{ productId: 1, quantity: 2 }] });
 
-    expect(response.status).toBe(STATUS_CODES.BAD_REQUEST);
-    expect(response.body).toEqual({
-      success: false,
-      message: "Insufficient stock for product Test Product",
-      data: null,
-    });
+    expect(mockedProjection).toHaveBeenCalledWith(1);
+    expect(mockedService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({ productId: 1, price: "10.00", name: "Product A" }),
+        ],
+      }),
+      expect.anything()
+    );
   });
 
-  it("should return 500 when product service fails", async () => {
-    mockRedisGet.mockResolvedValue(null);
-    (axios.get as jest.Mock).mockRejectedValue(
-      new Error("Service unavailable")
-    );
-
-    const response = await request(app)
+  it("accepts an order it cannot possibly fulfil, and lets inventory decide", async () => {
+    // order-service no longer pre-checks stock. Checking here would be a
+    // second, racy opinion: stock can change between the check and the
+    // reservation. inventory-service refuses with a conditional UPDATE and
+    // publishes inventory.reservation.failed, which fails the order.
+    const res = await request(app)
       .post("/createorder")
-      .send({ userId: 1, items: [{ productId: 1, quantity: 1 }] });
+      .send({ userId: 1, items: [{ productId: 1, quantity: 999999 }] });
 
-    expect(response.status).toBe(STATUS_CODES.INTERNAL_SERVER_ERROR);
-    expect(response.body).toEqual({
-      success: false,
-      message: "Error fetching product 1",
-      data: null,
-    });
+    expect(res.status).toBe(STATUS_CODES.ACCEPTED);
   });
 
-  it("should use cached product when available", async () => {
-    const cachedProduct = { id: 1, name: "Cached Product", price: 15 };
-    (mockRedisGet as jest.Mock).mockResolvedValue(
-      JSON.stringify(cachedProduct)
-    );
-    (axios.get as jest.Mock).mockResolvedValue({
-      data: {
-        success: true,
-        data: [{ productId: 1, stock: 5 }],
-      },
-    });
-    (createOrderService as jest.Mock).mockResolvedValue({
-      order: { id: 1, userId: 1, status: "pending", totalAmount: 15 },
-    });
+  it("returns 500 when the order cannot be written", async () => {
+    mockedService.mockRejectedValue(new Error("db down"));
 
-    const response = await request(app)
+    const res = await request(app)
       .post("/createorder")
-      .send({ userId: 1, items: [{ productId: 1, quantity: 1 }] });
+      .send({ userId: 1, items: [{ productId: 1, quantity: 2 }] });
 
-    expect(axios.get).not.toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/product/1")
-    );
-    expect(response.status).toBe(STATUS_CODES.CREATED);
+    expect(res.status).toBe(STATUS_CODES.INTERNAL_SERVER_ERROR);
   });
 });

@@ -165,15 +165,20 @@ curl -X POST http://localhost:5003/api/v1/createorder   -H "Content-Type: applic
 ```
 
 ```bash
-# 5. Pay. Nothing triggered this for you - that is the Phase 5 gap.
-#    Tracer: payment_success -> order_confirmed -> order marks CONFIRMED.
-curl -X POST http://localhost:5004/api/v1/create-payment   -H "Content-Type: application/json"   -d '{"orderId":1,"userId":1,"items":[{"productId":1,"quantity":2,"price":19.99}]}'
+# 5. Nothing to do. Watch the trace: payment charges automatically the moment
+#    inventory publishes inventory.order.reserved, then the order settles.
+#    Poll until it stops changing:
+curl http://localhost:5003/api/v1/orderStatus/1
+#    pending -> reserved -> paid -> confirmed
 ```
 
-```bash
-# 6. Confirm the state actually changed
-curl http://localhost:5003/api/v1/orderStatus/1
-```
+Since Phase 5 the saga runs itself. `POST /createorder` answers **202 Accepted**
+with a `statusUrl`, because the order has been taken on rather than completed -
+stock is not yet reserved and payment has not run.
+
+`POST /api/v1/create-payment` still exists for manual retries and operator use.
+Both paths converge on the same idempotent service, so an order cannot be
+charged twice.
 
 Endpoint reference:
 
@@ -185,8 +190,9 @@ Endpoint reference:
 | order | POST/GET | `/api/v1/createorder`, `/order/:id`, `/orderStatus/:id` |
 | payment | POST | `/api/v1/create-payment` |
 
-Note step 4: **you** had to trigger payment. Nothing in the system reacted to the stock
-reservation by charging the card. That gap is what Phase 5 closes.
+Watch the trace while this runs. Every event carries the same `correlationId`, so one
+order reads as one unbroken chain - including the payment hop, which used to start a new
+trace because a human began it.
 
 ---
 
@@ -296,6 +302,8 @@ the two `logger.add(...)` calls outside the `if`.
 | Order creation hangs | Redis is down. order-service awaits `redis.get()` first. |
 | `ECONNREFUSED 127.0.0.1:5672` | RabbitMQ is down. Events cannot publish. |
 | Order stays `pending` forever after a failed payment | Was the `invetory_service` exchange typo, fixed in Phase 1. If it recurs, check both sides agree on the exchange name. |
+| Order sits in `pending` or `reserved` and then goes `cancelled` | The saga timeout worker expired it (default 5 min, `SAGA_TIMEOUT_MS`). Something upstream never responded - check the queues and the DLQs. |
+| Order is `paid` but never `confirmed` | The payment went through but `inventory.reservation.confirmed` did not arrive. Deliberately NOT auto-expired: money has moved, so it needs a human. |
 | Order stays `pending` after a successful payment | Insufficient stock. inventory skips the item without publishing a failure event - Phase 3. |
 | `JsonWebTokenError: invalid signature` | `JWT_SECRET` differs between services. |
 | Stale stock in product responses | Redis cache not invalidated on admin stock update - Phase 2. |

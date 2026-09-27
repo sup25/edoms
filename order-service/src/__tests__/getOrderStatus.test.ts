@@ -24,7 +24,7 @@ describe("GET /orderStatus/:id", () => {
   });
 
   it("should return order status if the order exists", async () => {
-    const mockOrder = "completed";
+    const mockOrder = "confirmed";
     mockedService.getOrderStatusByIdService.mockResolvedValue(mockOrder);
     const response = await request(app).get("/orderStatus/1");
     expect(response.status).toBe(STATUS_CODES.OK);

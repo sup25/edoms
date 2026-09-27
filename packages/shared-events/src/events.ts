@@ -16,6 +16,9 @@ export const EventType = {
   ORDER_CREATED: "order.created",
 
   STOCK_RESERVED: "inventory.stock.reserved",
+  // Per ORDER, not per product. This is what payment reacts to, which is what
+  // removes the client from the middle of the saga (Phase 5).
+  ORDER_RESERVED: "inventory.order.reserved",
   STOCK_UPDATED: "inventory.stock.updated",
   RESERVATION_CONFIRMED: "inventory.reservation.confirmed",
   RESERVATION_RELEASED: "inventory.reservation.released",
@@ -52,6 +55,7 @@ export const EXCHANGE_FOR: Record<EventType, Exchange> = {
   [EventType.ORDER_CREATED]: Exchange.ORDER,
 
   [EventType.STOCK_RESERVED]: Exchange.INVENTORY,
+  [EventType.ORDER_RESERVED]: Exchange.INVENTORY,
   [EventType.STOCK_UPDATED]: Exchange.INVENTORY,
   [EventType.RESERVATION_CONFIRMED]: Exchange.INVENTORY,
   [EventType.RESERVATION_RELEASED]: Exchange.INVENTORY,

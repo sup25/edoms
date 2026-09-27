@@ -6,6 +6,7 @@ import logger from "./utils/logger";
 import { closeBroker } from "./rabbitmq/connection";
 import OutboxEvent from "./model/outbox.model";
 import { startOutboxRelay, stopOutboxRelay } from "./rabbitmq/outbox";
+import { startOrderReservedEventService } from "./handler/handleOrderReservedEvent";
 
 const app = express();
 (async () => {
@@ -17,6 +18,8 @@ const app = express();
     await OutboxEvent.sync({ alter: true });
     logger.info("Outbox table synced");
     startOutboxRelay();
+    // Payment now reacts to reservations instead of waiting for a client.
+    startOrderReservedEventService();
   } catch (error) {
     logger.error("Error:", error);
     process.exit(1);

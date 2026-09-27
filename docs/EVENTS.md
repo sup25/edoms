@@ -75,6 +75,7 @@ listing every key by hand.
 | `product.deleted` | product | inventory → deletes stock + reservations<br>order → invalidates cache | `{id}` |
 | `order.created` | order | inventory → reserves stock | `{orderId, userId?, items[], status?, totalAmount?, createdAt?}` |
 | `inventory.stock.reserved` | inventory | product → refreshes Redis cache | `{productId, orderId?, quantity?}` |
+| `inventory.order.reserved` | inventory | **payment → charges the order**<br>order → marks `reserved` | `{orderId, userId?, items[{productId, quantity, price, name?}], reservedAt?}` |
 | `inventory.stock.updated` | inventory | product → invalidates stock cache | `{productId, stock}` |
 | `inventory.reservation.confirmed` | inventory | order → marks `confirmed` | `{orderId, confirmedAt?}` |
 | `inventory.reservation.released` | inventory | order → marks `failed`<br>product → rolls back cache | `{orderId, productId, rolledBackQuantity, failedAt?}` |
@@ -125,23 +126,81 @@ drained.
 
 ---
 
-## Known gap: the correlation chain breaks at payment
-
-A trace of one order looks like this:
+## The saga
 
 ```
-[d4b4e661]  order.created                      -> inventory reserves stock
-[d4b4e661]  inventory.stock.reserved           -> product refreshes cache
-[891ee1dc]  payment.succeeded                  -> inventory confirms reservation
-[891ee1dc]  inventory.reservation.confirmed    -> order marks CONFIRMED
+POST /createorder
+   |
+   |  202 Accepted  (statusUrl for polling)
+   v
+order.created ................................. order: pending
+   |
+   v
+inventory reserves stock (conditional UPDATE)
+   |
+   +--> inventory.stock.reserved ............... product refreshes cache
+   |
+   +--> inventory.order.reserved ............... order: reserved
+           |
+           v
+        payment charges Stripe                  <- no client involvement
+           |
+           +--> payment.succeeded ............... order: paid
+           |       |
+           |       v
+           |    inventory confirms reservation
+           |       |
+           |       +--> inventory.reservation.confirmed ... order: confirmed
+           |
+           '--> payment.failed
+                   |
+                   v
+                inventory releases stock
+                   |
+                   '--> inventory.reservation.released .... order: failed
+
+insufficient stock:
+   inventory.reservation.failed ................ order: failed
+
+nothing arrives before the deadline:
+   saga timeout worker ......................... order: cancelled
 ```
 
-Two correlation ids, not one. Payment is triggered by a **separate HTTP request
-from the client**, which starts a new transaction, so it cannot inherit the
-order's id.
+One `correlationId` runs through the whole chain. Before Phase 5 it broke in
+two, because payment was started by a separate client request and so began a
+new transaction:
 
-This is the same structural gap as Phase 5: the saga has a hole in the middle
-where a human re-enters the system. When payment reacts to
-`inventory.stock.reserved` instead of waiting for a client call, the
-correlationId flows through automatically and one order becomes one trace.
-Until then, joining the two halves means going through `orderId`.
+```
+[d4b4e661]  order.created
+[d4b4e661]  inventory.stock.reserved
+[891ee1dc]  payment.succeeded              <- different id: a human re-entered
+[891ee1dc]  inventory.reservation.confirmed
+```
+
+Now:
+
+```
+[9c3028de]  order.created
+[9c3028de]  inventory.stock.reserved
+[9c3028de]  inventory.order.reserved
+[9c3028de]  payment.succeeded              <- automatic
+[9c3028de]  inventory.reservation.confirmed
+```
+
+## Saga timeouts
+
+An async saga has no natural failure: if an event is lost or a consumer never
+returns, the order simply waits. A worker in order-service sweeps every 30
+seconds and cancels anything in `pending` or `reserved` past
+`SAGA_TIMEOUT_MS` (default 5 minutes), publishing
+`inventory.reservation.failed` so inventory releases the stock it is holding.
+
+`paid` is deliberately never expired. Money has changed hands, and that needs
+a human rather than a timer.
+
+## Prices are required
+
+`price` is mandatory on `order.created` items. Payment charges from the value
+carried on the event and never calls back for it. An item without a price used
+to default to 0 downstream, which Stripe rejects as below the minimum charge -
+failing the order for a reason that had nothing to do with the customer.

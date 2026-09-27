@@ -1,5 +1,6 @@
 import Order from "../model/order.model";
 import { EventType } from "@edoms/shared-events";
+import { IN_FLIGHT_STATUSES } from "../model/order.model";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
 
@@ -25,9 +26,11 @@ export async function handleOrderConfirmedEvent(
         return;
       }
 
-      if (order.status !== "pending") {
+      // Since Phase 5 an order reaches here as 'paid' (pending -> reserved ->
+      // paid -> confirmed). Anything terminal is left alone.
+      if (!IN_FLIGHT_STATUSES.includes(order.status)) {
         logger.warn(
-          `Order with ID ${orderId} is not in 'pending' state. Current status: ${order.status}`
+          `Order ${orderId} is '${order.status}', not confirming again`
         );
         return;
       }

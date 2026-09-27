@@ -52,10 +52,23 @@ export const orderItemSchema = z.object({
   price: z.union([z.number(), z.string()]).optional(),
 });
 
+/*
+ * `price` is REQUIRED on order.created items.
+ *
+ * Since Phase 5 payment charges automatically from the price carried on the
+ * event. An item without one used to default to 0 downstream, which Stripe
+ * rejects as below the minimum charge - the order then failed for a reason
+ * that had nothing to do with the customer. Requiring it here turns a silent
+ * zero-value charge into a contract violation at the boundary.
+ */
+const pricedOrderItemSchema = orderItemSchema.extend({
+  price: z.union([z.number().positive(), z.string().regex(/^\d*\.?\d+$/)]),
+});
+
 export const orderCreatedSchema = z.object({
   orderId: positiveInt,
   userId: positiveInt.optional(),
-  items: z.array(orderItemSchema).nonempty(),
+  items: z.array(pricedOrderItemSchema).nonempty(),
   status: z.string().optional(),
   totalAmount: z.union([z.number(), z.string()]).optional(),
   createdAt: isoTimestamp.optional(),
@@ -65,6 +78,28 @@ export const stockReservedSchema = z.object({
   productId: positiveInt,
   orderId: positiveInt.optional(),
   quantity: z.number().int().positive().optional(),
+});
+
+/**
+ * Everything payment needs to charge for an order, denormalised onto the
+ * event. Payment must not have to call back over HTTP to find the prices -
+ * that is the coupling this phase removes.
+ */
+export const orderReservedSchema = z.object({
+  orderId: positiveInt,
+  userId: positiveInt.optional(),
+  items: z
+    .array(
+      z.object({
+        productId: positiveInt,
+        quantity: positiveInt,
+        price: z.union([z.number(), z.string()]),
+        name: z.string().optional(),
+      })
+    )
+    .nonempty(),
+  totalAmount: z.union([z.number(), z.string()]).optional(),
+  reservedAt: isoTimestamp.optional(),
 });
 
 export const stockUpdatedSchema = z.object({
@@ -113,6 +148,7 @@ export const PAYLOAD_SCHEMA: Record<EventType, z.ZodTypeAny> = {
   [EventType.PRODUCT_DELETED]: productDeletedSchema,
   [EventType.ORDER_CREATED]: orderCreatedSchema,
   [EventType.STOCK_RESERVED]: stockReservedSchema,
+  [EventType.ORDER_RESERVED]: orderReservedSchema,
   [EventType.STOCK_UPDATED]: stockUpdatedSchema,
   [EventType.RESERVATION_CONFIRMED]: reservationConfirmedSchema,
   [EventType.RESERVATION_RELEASED]: reservationReleasedSchema,

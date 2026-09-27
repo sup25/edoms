@@ -118,6 +118,24 @@ async function insertOutboxRow(service, eventType, payload) {
   return eventId;
 }
 
+/** Plants an order row in a chosen state, for tests that need one in flight. */
+async function insertOrderRow(status) {
+  const { Client } = requireFromServices("pg");
+  const env = serviceEnv("order-service");
+  const client = new Client({
+    host: env.DB_HOST, port: Number(env.DB_PORT || 5432),
+    user: env.DB_USERNAME, password: env.DB_PASSWORD, database: env.DB_NAME,
+  });
+  await client.connect();
+  const r = await client.query(
+    `INSERT INTO orders (user_id, items, status, created_at, updated_at)
+     VALUES (1, '[]'::json, $1, NOW(), NOW()) RETURNING id`,
+    [status]
+  );
+  await client.end();
+  return r.rows[0].id;
+}
+
 async function outboxRowStatus(service, eventId) {
   const { Client } = requireFromServices("pg");
   const env = serviceEnv(service);
@@ -170,7 +188,13 @@ async function publishOrderCreated(orderId, productId, quantity) {
     "order.events",
     "order.created",
     Buffer.from(
-      JSON.stringify(envelope("order.created", { orderId, items: [{ productId, quantity }] }))
+      JSON.stringify(
+        envelope("order.created", {
+          orderId,
+          // price is required on order.created items since Phase 5
+          items: [{ productId, quantity, price: "19.99", name: "Smoke Widget" }],
+        })
+      )
     ),
     { persistent: true, messageId: `inject-${Date.now()}` }
   );
@@ -253,7 +277,8 @@ async function register(role) {
 ${BOLD}writing an outbox row directly${RESET} ${DIM}(no publish call)${RESET}`);
     const eventId = await insertOutboxRow("order-service", "order.created", {
       orderId: fakeOrderId,
-      items: [{ productId, quantity: QTY }],
+      // Prices are required: payment charges from them without calling back.
+      items: [{ productId, quantity: QTY, price: "19.99", name: "Smoke Widget" }],
     });
     console.log(`${DIM}  event ${eventId} written as pending${RESET}`);
 
@@ -295,25 +320,30 @@ ${RED}${BOLD}${failures} check(s) failed.${RESET}
   });
   const orderId = order.body?.data?.id;
   if (!orderId) throw new Error(`create order failed: ${JSON.stringify(order.body)}`);
+  assert("order accepted with 202 (not completed)", order.status, 202);
   console.log(`${DIM}  order ${orderId}${RESET}`);
 
   await sleep(2500);
 
   if (OVERSELL_MODE) {
     /*
-     * order-service validates stock synchronously over HTTP before publishing,
-     * so simply ordering too much is rejected at the API and no event is ever
-     * produced. That pre-check is racy - stock can change between the check
-     * and the event being consumed - so the handler must refuse on its own.
-     * Inject an oversized order_created to prove it does.
+     * order-service does not pre-check stock any more, and a normal order now
+     * completes on its own within seconds - so it would be `confirmed` before
+     * an injected event landed, and the handler would rightly refuse to move a
+     * terminal order backwards.
+     *
+     * Plant an order that is still in flight and inject an oversized
+     * order.created for it, to exercise the handler in isolation.
      */
+    const pendingOrderId = await insertOrderRow("pending");
     const huge = START_STOCK * 100;
     console.log(
-      `\n${BOLD}injecting order_created for ${huge} units${RESET} ` +
-        `${DIM}(stock is ${START_STOCK - QTY})${RESET}`
+      `
+${BOLD}injecting order_created for ${huge} units${RESET} ` +
+        `${DIM}(order ${pendingOrderId}, stock is ${START_STOCK - QTY})${RESET}`
     );
-    await publishOrderCreated(orderId, productId, huge);
-    await sleep(3500);
+    await publishOrderCreated(pendingOrderId, productId, huge);
+    await sleep(4000);
 
     const stock = await api(`${INVENTORY}/stock/${productId}`);
     assert(
@@ -323,16 +353,16 @@ ${RED}${BOLD}${failures} check(s) failed.${RESET}
     );
     assert("stock never went negative", stock.body?.data >= 0, true);
 
-    const status = await api(`${ORDER}/orderStatus/${orderId}`);
-    assert("order FAILED via reservation_failed (defect #6)", status.body?.data, "failed");
+    const status = await api(`${ORDER}/orderStatus/${pendingOrderId}`);
+    assert("order FAILED via reservation.failed (defect #6)", status.body?.data, "failed");
 
     console.log(
       failures === 0
         ? `
-${GREEN}${BOLD}All checks passed.${RESET}  productId=${productId} orderId=${orderId}
+${GREEN}${BOLD}All checks passed.${RESET}  productId=${productId} orderId=${pendingOrderId}
 `
         : `
-${RED}${BOLD}${failures} check(s) failed.${RESET}
+${RED}${BOLD}${failures} check(s) failed.${RESET}  productId=${productId}
 `
     );
     process.exit(failures === 0 ? 0 : 1);
@@ -341,8 +371,14 @@ ${RED}${BOLD}${failures} check(s) failed.${RESET}
   const reserved = await api(`${INVENTORY}/stock/${productId}`);
   assert("stock decremented by reservation", reserved.body?.data, START_STOCK - QTY);
 
-  const pending = await api(`${ORDER}/orderStatus/${orderId}`);
-  assert("order is pending before payment", pending.body?.data, "pending");
+  // The order is 'reserved' now, not 'pending' - Phase 5 added the
+  // intermediate saga states.
+  const afterReserve = await api(`${ORDER}/orderStatus/${orderId}`);
+  assert(
+    "order is in flight (pending or reserved)",
+    ["pending", "reserved"].includes(afterReserve.body?.data),
+    true
+  );
 
   if (DUPLICATE_MODE) {
     // Defect #8: the SAME messageId delivered twice must only credit once.
@@ -380,27 +416,33 @@ ${RED}${BOLD}${failures} check(s) failed.${RESET}
   }
 
   if (!FAIL_MODE) {
-    // --- happy path: real Stripe TEST-mode charge ---
-    console.log(`\n${BOLD}paying (Stripe test mode)${RESET}`);
-    const paid = await api(`${PAYMENT}/create-payment`, {
-      method: "POST",
-      body: JSON.stringify({
-        orderId,
-        userId: user.id,
-        items: [{ productId, quantity: QTY, price: 19.99 }],
-      }),
-    });
-    assert("payment succeeded", paid.body?.status, "success");
+    /*
+     * NOTHING is sent here. Before Phase 5 the client had to POST
+     * /create-payment to move the saga along; payment now reacts to
+     * inventory.order.reserved on its own. If this passes without an HTTP
+     * call, the system is genuinely event-driven.
+     */
+    console.log(`
+${BOLD}waiting for the saga to complete by itself${RESET}`);
+    console.log(`${DIM}  (no payment request is sent - payment reacts to the reservation)${RESET}`);
 
-    await sleep(2500);
-    const confirmed = await api(`${ORDER}/orderStatus/${orderId}`);
-    assert("order CONFIRMED via payment_success -> order_confirmed", confirmed.body?.data, "confirmed");
+    let status = "";
+    const deadline = Date.now() + 40_000;
+    while (Date.now() < deadline) {
+      const r = await api(`${ORDER}/orderStatus/${orderId}`);
+      status = r.body?.data;
+      if (status === "confirmed" || status === "failed" || status === "cancelled") break;
+      await sleep(1000);
+    }
+
+    assert("order reached CONFIRMED with no client involvement", status, "confirmed");
 
     const res = await api(`${INVENTORY}/reservedstock/${orderId}`);
     assert("reservation confirmed", res.body?.data?.[0]?.status, "confirmed");
 
     const finalStock = await api(`${INVENTORY}/stock/${productId}`);
     assert("stock stays decremented", finalStock.body?.data, START_STOCK - QTY);
+
   } else {
     // --- failure path: compensation chain ---
     console.log(`\n${BOLD}publishing payment_failure${RESET}`);
