@@ -23,6 +23,7 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
+    "@edoms/shared-events": "file:../packages/shared-events",
     "@types/express": "^5.0.0",
     "amqplib": "^0.10.5",
     "dotenv": "^16.4.7",

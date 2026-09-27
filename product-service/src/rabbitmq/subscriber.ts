@@ -1,70 +1,60 @@
 import type { ConsumeMessage } from "amqplib";
+import {
+  EventType,
+  EXCHANGE_FOR,
+  EventEnvelope,
+  EventContractError,
+  parseEnvelope,
+  validatePayload,
+} from "@edoms/shared-events";
 import { createConsumerChannel, registerResubscriber } from "./connection";
 import { assertEventTopology, deliveryAttempt } from "./topology";
-import type { ExchangeType } from "./topology";
 import logger from "../utils/logger";
 
 export interface SubscribeOptions {
-  /**
-   * Durable queue name, e.g. "order-service.order-confirmed".
-   *
-   * Required. Previously this was an anonymous exclusive queue, which meant
-   * every event published while the service was down was lost, and each
-   * replica received its own copy instead of sharing the work.
-   */
+  /** Durable queue name, e.g. "order-service.reservation-confirmed". */
   queue: string;
-  /** Unacked messages allowed in flight per consumer. */
   prefetch?: number;
-  /** Total attempts before the message is parked in <queue>.dead. */
   maxDeliveries?: number;
-  /** How long a failed message waits before being retried. */
   retryDelayMs?: number;
 }
 
-/**
- * Subscribes to events from a RabbitMQ exchange.
- *
- * Delivery guarantees (Phase 1):
- * - durable, named queue, so events survive a consumer restart
- * - the message is acked only after the handler resolves; a handler that
- *   throws sends the message down the retry path instead of being silently
- *   dropped
- * - bounded retries, then a terminal dead-letter queue
- * - consumers re-attach automatically after a reconnect
- *
- * @param exchangeName - The exchange to subscribe to.
- * @param routingKey - The routing key to bind the queue with.
- * @param exchangeType - The type of exchange (default: "direct").
- * @param handler - Callback that processes the message.
- * @param options - Queue name and delivery tuning.
- */
-/** Delivery metadata passed to handlers so they can deduplicate redeliveries. */
 export interface EventMeta {
-  /** Broker messageId set by the publisher. Undefined for events injected by
-   *  hand (e.g. the RabbitMQ management UI), in which case dedupe is skipped. */
   messageId?: string;
-  /** 1 on first delivery, incrementing on each retry. */
+  correlationId: string;
+  causationId?: string;
   attempt: number;
   queue: string;
 }
 
-export async function subscribeEvent(
-  exchangeName: string,
-  routingKey: string,
-  exchangeType: ExchangeType = "direct",
-  handler: (
-    eventType: string,
-    data: any,
-    meta: EventMeta
-  ) => Promise<void> | void,
+export type EventHandler<T = unknown> = (
+  payload: T,
+  meta: EventMeta,
+  envelope: EventEnvelope<T>
+) => Promise<void> | void;
+
+/**
+ * Subscribes to one domain event.
+ *
+ * Phase 2: the caller names the event; the exchange and binding key come from
+ * the shared catalogue, so producer and consumer cannot drift apart. The
+ * envelope is parsed and the payload validated before the handler runs, so
+ * business logic only ever sees well-formed data.
+ *
+ * A contract violation is dead-lettered immediately rather than retried - a
+ * payload of the wrong shape will not become the right shape on attempt four.
+ */
+export async function subscribeEvent<T = unknown>(
+  eventType: EventType,
+  handler: EventHandler<T>,
   options: SubscribeOptions
 ): Promise<void> {
-  const {
-    queue,
-    prefetch = 10,
-    maxDeliveries = 5,
-    retryDelayMs = 5_000,
-  } = options;
+  const { queue, prefetch = 10, maxDeliveries = 5, retryDelayMs = 5_000 } = options;
+
+  const exchange = EXCHANGE_FOR[eventType];
+  if (!exchange) {
+    throw new Error(`No exchange registered for event type ${eventType}`);
+  }
 
   const attach = async (): Promise<void> => {
     const channel = await createConsumerChannel();
@@ -74,24 +64,23 @@ export async function subscribeEvent(
     });
 
     const topology = await assertEventTopology(channel, {
-      exchange: exchangeName,
-      exchangeType,
-      routingKey,
+      exchange,
+      exchangeType: "topic",
+      routingKey: eventType,
       queue,
       retryDelayMs,
     });
 
-    // Bound in-flight work so one consumer cannot swallow the whole backlog.
     await channel.prefetch(prefetch);
 
-    const sendToDeadLetter = (msg: ConsumeMessage, reason: string): void => {
+    const deadLetter = (msg: ConsumeMessage, reason: string): void => {
       channel.publish("", topology.deadQueue, msg.content, {
         ...msg.properties,
         headers: {
           ...(msg.properties.headers ?? {}),
           "x-death-reason": reason,
-          "x-original-exchange": exchangeName,
-          "x-original-routing-key": routingKey,
+          "x-original-exchange": exchange,
+          "x-original-routing-key": eventType,
         },
         persistent: true,
       });
@@ -102,63 +91,65 @@ export async function subscribeEvent(
       topology.queue,
       async (msg) => {
         if (!msg) return;
-
         const attempt = deliveryAttempt(msg.properties.headers);
 
-        // Unparseable content will never parse. Retrying is pointless, so it
-        // goes straight to the dead-letter queue.
-        let event: string;
-        let data: unknown;
+        let envelope: EventEnvelope;
+        let payload: T;
         try {
-          const parsed = JSON.parse(msg.content.toString());
-          event = parsed.event;
-          data = parsed.data;
-          if (typeof event !== "string") {
-            throw new Error("missing 'event' field");
+          envelope = parseEnvelope(msg.content.toString());
+          if (envelope.eventType !== eventType) {
+            throw new EventContractError(
+              `expected ${eventType} on ${queue}, got ${envelope.eventType}`
+            );
           }
+          payload = validatePayload<T>(eventType, envelope.payload);
         } catch (error: unknown) {
-          logger.error(`Malformed message on ${queue}, dead-lettering`, error);
-          sendToDeadLetter(msg, "malformed");
+          // Contract violations are permanent. Retrying wastes capacity.
+          logger.error(
+            `Contract violation on ${queue}, dead-lettering`,
+            error instanceof EventContractError
+              ? { message: error.message, detail: error.detail }
+              : error
+          );
+          deadLetter(msg, "contract-violation");
           return;
         }
 
+        const meta: EventMeta = {
+          messageId: msg.properties.messageId || envelope.eventId,
+          correlationId: envelope.correlationId,
+          causationId: envelope.eventId,
+          attempt,
+          queue: topology.queue,
+        };
+
         try {
-          // The whole point of Phase 1: await the handler BEFORE acking.
-          await handler(event, data, {
-            messageId: msg.properties.messageId || undefined,
-            attempt,
-            queue: topology.queue,
-          });
+          await handler(payload, meta, envelope as EventEnvelope<T>);
           channel.ack(msg);
         } catch (error: unknown) {
           if (attempt >= maxDeliveries) {
             logger.error(
-              `Handler for ${event} on ${queue} failed after ${attempt} attempts, dead-lettering`,
+              `Handler for ${eventType} on ${queue} failed after ${attempt} attempts ` +
+                `(correlationId=${meta.correlationId}), dead-lettering`,
               error
             );
-            sendToDeadLetter(msg, "max-deliveries-exceeded");
+            deadLetter(msg, "max-deliveries-exceeded");
             return;
           }
-
           logger.warn(
-            `Handler for ${event} on ${queue} failed (attempt ${attempt}/${maxDeliveries}), retrying in ${retryDelayMs}ms`,
+            `Handler for ${eventType} on ${queue} failed (attempt ${attempt}/${maxDeliveries}, ` +
+              `correlationId=${meta.correlationId}), retrying in ${retryDelayMs}ms`,
             error
           );
-          // requeue=false dead-letters into <queue>.retry, which returns the
-          // message to the main queue once its TTL expires.
           channel.nack(msg, false, false);
         }
       },
       { noAck: false }
     );
 
-    logger.info(
-      `Subscribed to ${exchangeName} on queue ${topology.queue} with routing key ${routingKey}`
-    );
+    logger.info(`Subscribed to ${eventType} on ${exchange} via queue ${topology.queue}`);
   };
 
   await attach();
-
-  // Re-attach this consumer after a reconnect.
   registerResubscriber(attach);
 }

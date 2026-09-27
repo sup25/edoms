@@ -1,9 +1,11 @@
 import { QueryTypes } from "sequelize";
 import sequelize from "../config/db";
 import OrderReservation from "../model/orderReservation.model";
-import { publishEvent } from "../rabbitmq/publisher";
+import { EventType } from "@edoms/shared-events";
+import { publish } from "../rabbitmq/publisher";
 import { subscribeEvent } from "../rabbitmq/subscriber";
-import { processOnce, EventMeta } from "../utils/idempotency";
+import { processOnce } from "../utils/idempotency";
+import type { EventMeta } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
 
 interface PaymentSuccessEvent {
@@ -20,16 +22,12 @@ const CONSUMER = "inventory.payment-success";
  * reservation that was since cancelled by a failure.
  */
 export async function handlePaymentSuccessEvent(
-  eventType: string,
   event: PaymentSuccessEvent,
   meta?: EventMeta
 ): Promise<void> {
-  if (eventType !== "payment_success") {
-    logger.info(`Unhandled event type: ${eventType}`);
-    return;
-  }
-
   const orderId = Number(event?.orderId);
+  const correlationId = meta?.correlationId;
+  const causationId = meta?.causationId;
   if (!Number.isInteger(orderId) || orderId <= 0) {
     logger.error(`payment_success event with invalid orderId: ${event?.orderId}`);
     return;
@@ -37,7 +35,7 @@ export async function handlePaymentSuccessEvent(
 
   let confirmed = 0;
 
-  await processOnce(CONSUMER, eventType, meta, async (transaction) => {
+  await processOnce(CONSUMER, EventType.PAYMENT_SUCCEEDED, meta, async (transaction) => {
     const reservations = await OrderReservation.findAll({
       where: { orderId },
       transaction,
@@ -71,23 +69,22 @@ export async function handlePaymentSuccessEvent(
 
   if (confirmed > 0) {
     logger.info(`Confirmed ${confirmed} reservation(s) for order ${orderId}`);
-    await publishEvent(
-      "inventory_service",
-      "order_confirmed",
-      "order confirmed",
-      { orderId, confirmedAt: new Date().toISOString() }
+    await publish(
+      EventType.RESERVATION_CONFIRMED,
+      { orderId, confirmedAt: new Date().toISOString() },
+      { correlationId, causationId }
     );
   }
 }
 
 export async function startPaymentSuccessEventService() {
   await subscribeEvent(
-    "payment_service",
-    "payment_success",
-    "direct",
-    async (eventType: string, data: any, meta) => {
-      logger.info(`Received event: ${eventType}`, data);
-      await handlePaymentSuccessEvent(eventType, data, meta);
+    EventType.PAYMENT_SUCCEEDED,
+    async (payload: any, meta) => {
+      logger.info(`Received ${EventType.PAYMENT_SUCCEEDED}`, {
+        correlationId: meta.correlationId,
+      });
+      await handlePaymentSuccessEvent(payload, meta);
     },
     { queue: "inventory-service.payment-success" }
   );

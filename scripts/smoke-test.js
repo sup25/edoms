@@ -60,6 +60,19 @@ async function api(url, opts = {}) {
   return { status: res.status, body };
 }
 
+/** Builds a Phase 2 envelope, the shape every consumer now validates. */
+function envelope(eventType, payload, messageId) {
+  return {
+    eventId: messageId || `smoke-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    eventType,
+    eventVersion: 1,
+    occurredAt: new Date().toISOString(),
+    producer: "smoke-test",
+    correlationId: `smoke-corr-${Date.now()}`,
+    payload,
+  };
+}
+
 function requireFromServices(moduleName) {
   for (const service of ["order-service", "inventory-service", "product-service", "payment-service"]) {
     const candidate = path.resolve(__dirname, "..", service, "node_modules", moduleName);
@@ -72,11 +85,11 @@ async function publishPaymentFailure(orderId, messageId) {
   const amqplib = requireFromServices("amqplib");
   const connection = await amqplib.connect(process.env.BROKER_URL || "amqp://localhost:5672");
   const channel = await connection.createChannel();
-  await channel.assertExchange("payment_service", "direct", { durable: true });
+  await channel.assertExchange("payment.events", "topic", { durable: true });
   channel.publish(
-    "payment_service",
-    "payment_failure",
-    Buffer.from(JSON.stringify({ event: "payment_failure", data: { orderId: String(orderId) } })),
+    "payment.events",
+    "payment.failed",
+    Buffer.from(JSON.stringify(envelope("payment.failed", { orderId: String(orderId) }))),
     // messageId is what the consumer deduplicates on. Passing the SAME id
     // twice simulates a broker redelivery.
     messageId ? { persistent: true, messageId } : { persistent: true }
@@ -92,15 +105,12 @@ async function publishOrderCreated(orderId, productId, quantity) {
     process.env.BROKER_URL || "amqp://localhost:5672"
   );
   const channel = await connection.createChannel();
-  await channel.assertExchange("order_service", "direct", { durable: true });
+  await channel.assertExchange("order.events", "topic", { durable: true });
   channel.publish(
-    "order_service",
-    "create_order",
+    "order.events",
+    "order.created",
     Buffer.from(
-      JSON.stringify({
-        event: "order_created",
-        data: { orderId, items: [{ productId, quantity }] },
-      })
+      JSON.stringify(envelope("order.created", { orderId, items: [{ productId, quantity }] }))
     ),
     { persistent: true, messageId: `inject-${Date.now()}` }
   );

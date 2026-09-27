@@ -24,6 +24,7 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
+    "@edoms/shared-events": "file:../packages/shared-events",
     "@types/supertest": "^6.0.2",
     "amqplib": "^0.10.5",
     "axios": "^1.8.2",

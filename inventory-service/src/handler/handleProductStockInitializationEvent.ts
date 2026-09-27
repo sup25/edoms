@@ -1,4 +1,5 @@
 import Stock from "../model/stock.model";
+import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
 
@@ -14,19 +15,11 @@ interface ProductEvent {
  * @param eventType - The type of event (should be "product created").
  * @param event - The event data containing the product id and optional stock.
  */
-export async function handleProductStockInitialization(
-  eventType: string,
-  event: ProductEvent
-) {
+export async function handleProductStockInitialization(event: ProductEvent) {
   try {
     logger.info("Processing event:", event);
 
-    if (eventType === "product created") {
-      // Validate required field: id
-      if (typeof event.id !== "number") {
-        throw new Error("Invalid event data: 'id' must be a number");
-      }
-
+    {
       const productId = event.id;
       const stockValue = typeof event.stock === "number" ? event.stock : 0; // Default to 0 if stock isn't provided or isn't a number
 
@@ -49,8 +42,6 @@ export async function handleProductStockInitialization(
       } else {
         logger.info(`Stock already exists for product ${productId}`);
       }
-    } else {
-      logger.error(`Unexpected event type: ${eventType}`);
     }
   } catch (error) {
     logger.error("Error handling product event:", error);
@@ -63,13 +54,13 @@ export async function handleProductStockInitialization(
  * Starts the service to listen for `product created` events and process them.
  */
 export async function startProductStockInitializationEventService() {
-  await subscribeEvent(
-    "product_service",
-    "product_created",
-    "direct",
-    async (eventType: string, data: ProductEvent) => {
-      logger.info(`Received event: ${eventType}`, data);
-      await handleProductStockInitialization(eventType, data);
+  await subscribeEvent<ProductEvent>(
+    EventType.PRODUCT_CREATED,
+    async (payload, meta) => {
+      logger.info(`Received ${EventType.PRODUCT_CREATED}`, {
+        correlationId: meta.correlationId,
+      });
+      await handleProductStockInitialization(payload);
     },
     { queue: "inventory-service.product-created" }
   );

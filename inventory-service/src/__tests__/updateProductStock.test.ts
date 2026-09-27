@@ -1,6 +1,7 @@
 import connectdb from "../config/db";
 import { updateProductStockController } from "../controller";
-import { publishEvent } from "../rabbitmq/publisher";
+import { EventType } from "@edoms/shared-events";
+import { publish } from "../rabbitmq/publisher";
 import { updateProductStockService } from "../service";
 import { Request, Response, NextFunction } from "express";
 
@@ -48,7 +49,7 @@ jest.mock("../model/orderReservation.model", () => {
 // Mock other dependencies
 jest.mock("../config/db");
 jest.mock("../rabbitmq/publisher", () => ({
-  publishEvent: jest.fn().mockResolvedValue(true),
+  publish: jest.fn().mockResolvedValue("evt-1"),
 }));
 jest.mock("../service", () => ({
   updateProductStockService: jest.fn(),
@@ -218,7 +219,7 @@ describe("Product Stock Management", () => {
       (updateProductStockService as jest.Mock).mockResolvedValue(
         mockStockInstance
       );
-      (publishEvent as jest.Mock).mockResolvedValue(true);
+      (publish as jest.Mock).mockResolvedValue(true);
 
       await updateProductStockController(mockReq, mockRes, mockNext);
 
@@ -226,12 +227,10 @@ describe("Product Stock Management", () => {
         id: 1,
         stock: 10,
       });
-      expect(publishEvent).toHaveBeenCalledWith(
-        "inventory_service",
-        "stock_updated",
-        "Stock Updated",
-        { productId: 1, stock: 10 }
-      );
+      expect(publish).toHaveBeenCalledWith(EventType.STOCK_UPDATED, {
+        productId: 1,
+        stock: 10,
+      });
       expect(mockRes.status).toHaveBeenCalledWith(200);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: true,

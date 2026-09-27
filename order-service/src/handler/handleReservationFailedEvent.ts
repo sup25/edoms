@@ -1,4 +1,5 @@
 import Order from "../model/order.model";
+import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
 
@@ -19,13 +20,8 @@ interface ReservationFailedEvent {
  * and this handler closes the loop.
  */
 export async function handleReservationFailedEvent(
-  eventType: string,
   event: ReservationFailedEvent
 ): Promise<void> {
-  if (eventType !== "reservation failed") {
-    logger.error("Invalid event type:", eventType);
-    return;
-  }
 
   const { orderId, productId, requestedQuantity, reason } = event;
 
@@ -57,12 +53,12 @@ export async function handleReservationFailedEvent(
 
 export async function startReservationFailedEventService() {
   await subscribeEvent(
-    "inventory_service",
-    "reservation_failed",
-    "direct",
-    async (eventType: string, data: any) => {
-      logger.info(`Received event: ${eventType}`, data);
-      await handleReservationFailedEvent(eventType, data);
+    EventType.RESERVATION_FAILED,
+    async (payload: any, meta) => {
+      logger.info(`Received ${EventType.RESERVATION_FAILED}`, {
+        correlationId: meta.correlationId,
+      });
+      await handleReservationFailedEvent(payload);
     },
     { queue: "order-service.reservation-failed" }
   );

@@ -1,5 +1,6 @@
 import axios from "axios";
 import redis from "../utils/redis";
+import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import { INVENTORY_SERVICE_URL } from "../config/apiEndpoints";
 import logger from "../utils/logger";
@@ -10,14 +11,10 @@ import logger from "../utils/logger";
  * @remarks
  * - Expects messages in the format: `{ event: "stock_decrement", data: { productId: number } }`.
  */
-export async function handleStockDecrement(eventType: string, event: any) {
-  if (eventType === "Stock Decrement") {
+export async function handleStockDecrement(event: any) {
+  {
     const { productId } = event;
 
-    if (eventType !== "Stock Decrement") {
-      console.warn(`Unexpected event type: ${eventType}`);
-      return;
-    }
 
     try {
       // Validate productId
@@ -50,13 +47,14 @@ export async function handleStockDecrement(eventType: string, event: any) {
 
 export async function startStockDecrementEventService() {
   await subscribeEvent(
-    "inventory_service",
-    "stock_decrement",
-    "direct",
-    async (eventType: string, data: any) => {
-      await handleStockDecrement(eventType, data);
+    EventType.STOCK_RESERVED,
+    async (payload: any, meta) => {
+      logger.info(`Received ${EventType.STOCK_RESERVED}`, {
+        correlationId: meta.correlationId,
+      });
+      await handleStockDecrement(payload);
     },
-    { queue: "product-service.stock-decrement" }
+    { queue: "product-service.stock-reserved" }
   );
 
   logger.info("service started for stock decrement event");

@@ -4,7 +4,8 @@ import { processPaymentAndStoreDetailsService } from "../service";
 import expressAsyncHandler from "express-async-handler";
 import { STATUS_CODES } from "../constants";
 import { orderUrl, reservedStockUrl } from "../config/apiEndpoints";
-import { publishEvent } from "../rabbitmq/publisher";
+import { EventType } from "@edoms/shared-events";
+import { publish } from "../rabbitmq/publisher";
 import { calculateTotalAmount } from "../utils/calculateTotalAmount";
 import { TPaymentResponse } from "../types";
 import logger from "../utils/logger";
@@ -121,27 +122,15 @@ export const processPaymentAndStoreDetailsController = expressAsyncHandler(
         await processPaymentAndStoreDetailsService(orderIdStr, userId, items);
 
       if (result.status === "success") {
-        await publishEvent(
-          "payment_service",
-          "payment_success",
-          "payment_success",
-          {
-            orderId: orderIdStr,
-            userId,
-            items,
-          }
-        );
+        await publish(EventType.PAYMENT_SUCCEEDED, {
+          orderId: orderIdStr,
+          userId,
+          items,
+        });
       }
 
       if (result.status === "failed") {
-        await publishEvent(
-          "payment_service",
-          "payment_failure",
-          "payment_failure",
-          {
-            orderId: orderIdStr,
-          }
-        );
+        await publish(EventType.PAYMENT_FAILED, { orderId: orderIdStr });
       }
 
       res.json({

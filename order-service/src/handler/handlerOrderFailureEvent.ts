@@ -1,4 +1,5 @@
 import Order from "../model/order.model";
+import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
 
@@ -8,13 +9,11 @@ interface OrderConfirmedEvent {
 }
 
 export async function handleOrderFailureEvent(
-  eventType: string,
   event: OrderConfirmedEvent
 ): Promise<void> {
   try {
-    if (eventType === "order failed") {
+    {
       logger.info("Processing order event:", event);
-      logger.info("Event type:", eventType);
       const { orderId, confirmedAt } = event;
       logger.info(
         `Processing order_failure event for orderId: ${orderId}, confirmed at: ${confirmedAt}`
@@ -35,8 +34,6 @@ export async function handleOrderFailureEvent(
 
       await order.update({ status: "failed" });
       logger.info(`Order with ID ${orderId} status updated to 'failed'`);
-    } else {
-      logger.error("Invalid event type:", eventType);
     }
   } catch (error) {
     logger.error("Error handling order_failed event:", error);
@@ -46,12 +43,12 @@ export async function handleOrderFailureEvent(
 
 export async function startOrderFailureEventService() {
   await subscribeEvent(
-    "inventory_service",
-    "order_failed",
-    "direct",
-    async (eventType: string, data: any) => {
-      logger.info(`Received event: ${eventType}`, data);
-      await handleOrderFailureEvent(eventType, data);
+    EventType.RESERVATION_RELEASED,
+    async (payload: any, meta) => {
+      logger.info(`Received ${EventType.RESERVATION_RELEASED}`, {
+        correlationId: meta.correlationId,
+      });
+      await handleOrderFailureEvent(payload);
     },
     { queue: "order-service.order-failed" }
   );

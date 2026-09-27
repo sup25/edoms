@@ -28,6 +28,12 @@ const STALE_EXCHANGES = [
   "order_exchange",
   "payment_exchange",
   "invetory_service",
+  // Replaced in Phase 2 by the topic exchanges product.events, order.events,
+  // inventory.events and payment.events. Drain their queues before removing.
+  "product_service",
+  "order_service",
+  "inventory_service",
+  "payment_service",
 ];
 
 const STALE_QUEUES = [

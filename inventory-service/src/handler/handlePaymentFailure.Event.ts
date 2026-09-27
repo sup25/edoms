@@ -1,9 +1,11 @@
 import { QueryTypes } from "sequelize";
 import sequelize from "../config/db";
 import OrderReservation from "../model/orderReservation.model";
+import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
-import { publishEvent } from "../rabbitmq/publisher";
-import { processOnce, EventMeta } from "../utils/idempotency";
+import { publish } from "../rabbitmq/publisher";
+import { processOnce } from "../utils/idempotency";
+import type { EventMeta } from "../rabbitmq/subscriber";
 import logger from "../utils/logger";
 
 interface PaymentFailureEvent {
@@ -24,16 +26,12 @@ const CONSUMER = "inventory.payment-failure";
  * - wrapped in processOnce as a second layer of protection
  */
 export async function handlePaymentFailureEvent(
-  eventType: string,
   event: PaymentFailureEvent,
   meta?: EventMeta
 ): Promise<void> {
-  if (eventType !== "payment_failure") {
-    logger.info(`Unhandled event type: ${eventType}`);
-    return;
-  }
-
   const orderId = Number(event?.orderId);
+  const correlationId = meta?.correlationId;
+  const causationId = meta?.causationId;
   if (!Number.isInteger(orderId) || orderId <= 0) {
     logger.error(`payment_failure event with invalid orderId: ${event?.orderId}`);
     return;
@@ -41,7 +39,7 @@ export async function handlePaymentFailureEvent(
 
   const released: { productId: number; quantity: number }[] = [];
 
-  await processOnce(CONSUMER, eventType, meta, async (transaction) => {
+  await processOnce(CONSUMER, EventType.PAYMENT_FAILED, meta, async (transaction) => {
     released.length = 0;
 
     const reservations = await OrderReservation.findAll({
@@ -100,12 +98,16 @@ export async function handlePaymentFailureEvent(
   // Published after commit so consumers never see an event for work that was
   // rolled back.
   for (const item of released) {
-    await publishEvent("inventory_service", "order_failed", "order failed", {
-      orderId,
-      productId: item.productId,
-      rolledBackQuantity: item.quantity,
-      failedAt: new Date().toISOString(),
-    });
+    await publish(
+      EventType.RESERVATION_RELEASED,
+      {
+        orderId,
+        productId: item.productId,
+        rolledBackQuantity: item.quantity,
+        failedAt: new Date().toISOString(),
+      },
+      { correlationId, causationId }
+    );
   }
 
   if (released.length === 0) {
@@ -117,12 +119,12 @@ export async function handlePaymentFailureEvent(
 
 export async function startPaymentFailureEventService() {
   await subscribeEvent(
-    "payment_service",
-    "payment_failure",
-    "direct",
-    async (eventType: string, data: any, meta) => {
-      logger.info(`Received event: ${eventType}`, data);
-      await handlePaymentFailureEvent(eventType, data, meta);
+    EventType.PAYMENT_FAILED,
+    async (payload: any, meta) => {
+      logger.info(`Received ${EventType.PAYMENT_FAILED}`, {
+        correlationId: meta.correlationId,
+      });
+      await handlePaymentFailureEvent(payload, meta);
     },
     { queue: "inventory-service.payment-failure" }
   );

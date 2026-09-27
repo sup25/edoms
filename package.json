@@ -14,9 +14,11 @@
     "smoke:duplicate": "node scripts/smoke-test.js --duplicate",
     "smoke:all": "npm run smoke && npm run smoke:fail && npm run smoke:oversell && npm run smoke:duplicate",
     "verify:messaging": "node scripts/verify-messaging.js",
+    "migrate:broker": "node scripts/migrate-broker-phase2.js",
     "clean:broker": "node scripts/clean-broker.js",
-    "install:all": "npm --prefix auth-service install && npm --prefix product-service install && npm --prefix inventory-service install && npm --prefix order-service install && npm --prefix payment-service install",
-    "build:all": "npm --prefix auth-service run build && npm --prefix product-service run build && npm --prefix inventory-service run build && npm --prefix order-service run build && npm --prefix payment-service run build",
-    "test:all": "npm --prefix product-service test && npm --prefix inventory-service test && npm --prefix order-service test && npm --prefix payment-service test"
+    "install:all": "npm --prefix packages/shared-events install && npm --prefix auth-service install && npm --prefix product-service install && npm --prefix inventory-service install && npm --prefix order-service install && npm --prefix payment-service install",
+    "build:events": "npm --prefix packages/shared-events run build",
+    "build:all": "npm run build:events && npm --prefix auth-service run build && npm --prefix product-service run build && npm --prefix inventory-service run build && npm --prefix order-service run build && npm --prefix payment-service run build",
+    "test:all": "npm --prefix packages/shared-events test && npm --prefix product-service test && npm --prefix inventory-service test && npm --prefix order-service test && npm --prefix payment-service test"
   }
 }
