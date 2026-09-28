@@ -59,9 +59,13 @@ describe("GET /api/v1/products", () => {
     // Mock Redis mget to return null (simulate missing stock in Redis)
     mockedRedis.mget.mockResolvedValue([null]); // Only one product, so one value
 
-    // Mock inventory service response
-    const stockData = [{ productId: 1, stock: 5 }];
+    // Mock inventory service response.
+    // `status` is required: the controller rejects anything that is not 200,
+    // so a mock without it took the "inventory unavailable" fallback and the
+    // assertion below saw "Unavailable" instead of 5. That is why this test
+    // had been failing since before Phase 1.
     mockedAxios.get.mockResolvedValue({
+      status: 200,
       data: { data: [{ productId: 1, stock: 5 }] },
     });
 

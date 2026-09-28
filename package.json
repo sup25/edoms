@@ -21,6 +21,6 @@
     "build:events": "npm --prefix packages/shared-events run build",
     "build:obs": "npm --prefix packages/shared-observability run build",
     "build:all": "npm run build:events && npm run build:obs && npm --prefix auth-service run build && npm --prefix product-service run build && npm --prefix inventory-service run build && npm --prefix order-service run build && npm --prefix payment-service run build",
-    "test:all": "npm --prefix packages/shared-events test && npm --prefix packages/shared-observability test && npm --prefix product-service test && npm --prefix inventory-service test && npm --prefix order-service test && npm --prefix payment-service test"
+    "test:all": "npm --prefix packages/shared-events test && npm --prefix packages/shared-observability test && npm --prefix auth-service test && npm --prefix product-service test && npm --prefix inventory-service test && npm --prefix order-service test && npm --prefix payment-service test"
   }
 }

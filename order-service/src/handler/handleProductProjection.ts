@@ -1,6 +1,7 @@
 import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
 import ProductProjection from "../model/productProjection.model";
+import { cacheWrite } from "../utils/cache";
 import redis from "../utils/redis";
 import logger from "../utils/logger";
 
@@ -47,7 +48,9 @@ export async function upsertProduct(event: ProductEvent): Promise<void> {
     updatedAt: new Date(),
   });
 
-  await redis.del(`product:${id}`);
+  // The projection row is the source of truth now; this only drops a stale
+  // cache entry, so it must not dead-letter the projection event.
+  await cacheWrite(`product:${id}`, () => redis.del(`product:${id}`));
   logger.info(`Projected product ${id}`);
 }
 
@@ -59,7 +62,7 @@ export async function removeProduct(event: ProductEvent): Promise<void> {
   }
 
   await ProductProjection.destroy({ where: { productId: id } });
-  await redis.del(`product:${id}`);
+  await cacheWrite(`product:${id}`, () => redis.del(`product:${id}`));
   logger.info(`Removed product ${id} from the projection`);
 }
 
