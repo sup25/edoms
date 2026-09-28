@@ -7,7 +7,10 @@
     "dev": "nodemon --exec ts-node-dev --respawn src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "jest"
+    "test": "jest",
+    "migrate": "ts-node src/migrate.ts up",
+    "migrate:down": "ts-node src/migrate.ts down",
+    "migrate:status": "ts-node src/migrate.ts pending"
   },
   "keywords": [],
   "author": "",
@@ -42,6 +45,7 @@
     "sequelize": "^6.37.6",
     "supertest": "^7.0.0",
     "ts-node-dev": "^2.0.0",
+    "umzug": "^3.8.3",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0",
     "zod": "^3.24.2"

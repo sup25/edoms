@@ -22,6 +22,7 @@ import {
   stopTracing,
 } from "@edoms/shared-observability";
 import { dependencies } from "./observability";
+import { runMigrations } from "./config/migrator";
 import helmet from "helmet";
 import { apiLimiter } from "./middleware/security";
 import { stripeWebhookController } from "./controller/stripeWebhook";
@@ -36,11 +37,13 @@ const app = express();
   try {
     await connectdb.authenticate();
     logger.info("Connection successful");
-    await Payment.sync({ alter: true });
-    logger.info("Payment table synced");
-    await OutboxEvent.sync({ alter: true });
-    await ProcessedWebhook.sync({ alter: true });
-    logger.info("Outbox table synced");
+
+    /*
+     * Migrations, not sync({ alter: true }). The old call re-added a
+     * unique index on every boot because Sequelize could not recognise
+     * the one it made last time - see migrations/0002.
+     */
+    await runMigrations();
     startOutboxRelay();
     startQueueMonitor();
     // Payment now reacts to reservations instead of waiting for a client.

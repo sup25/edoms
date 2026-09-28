@@ -17,6 +17,7 @@ import {
   stopTracing,
 } from "@edoms/shared-observability";
 import { dependencies } from "./observability";
+import { runMigrations } from "./config/migrator";
 import helmet from "helmet";
 import { apiLimiter } from "./middleware/security";
 import logger from "./utils/logger";
@@ -25,8 +26,13 @@ import logger from "./utils/logger";
   try {
     await connect.authenticate();
     logger.info("Connection successful");
-    await User.sync({ force: false });
-    logger.info("Users table synced");
+
+    /*
+     * Migrations, not sync({ alter: true }). The old call re-added a
+     * unique index on every boot because Sequelize could not recognise
+     * the one it made last time - see migrations/0002.
+     */
+    await runMigrations();
   } catch (error) {
     logger.error("Startup failed", error);
   }

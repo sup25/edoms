@@ -28,6 +28,7 @@ import {
   stopTracing,
 } from "@edoms/shared-observability";
 import { dependencies } from "./observability";
+import { runMigrations } from "./config/migrator";
 import helmet from "helmet";
 import { apiLimiter } from "./middleware/security";
 import { startQueueMonitor, stopQueueMonitor } from "./rabbitmq/queueMonitor";
@@ -40,12 +41,13 @@ const app = express();
   try {
     await sequelize.authenticate();
     logger.info("Connection successful");
-    await Order.sync({ alter: true });
-    logger.info("Order table synced");
-    await OutboxEvent.sync({ alter: true });
-    logger.info("Outbox table synced");
-    await ProductProjection.sync({ alter: true });
-    logger.info("Product projection table synced");
+
+    /*
+     * Migrations, not sync({ alter: true }). The old call re-added a
+     * unique index on every boot because Sequelize could not recognise
+     * the one it made last time - see migrations/0002.
+     */
+    await runMigrations();
     startSagaTimeoutWorker();
     // Started only after the table exists, otherwise the first poll errors.
     startOutboxRelay();
