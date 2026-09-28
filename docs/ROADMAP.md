@@ -164,6 +164,16 @@ handlers that already react correctly.
       behind `requireUser`, but `createOrderController` reads `userId` from `req.body` and
       ignores `req.user`, so an authenticated user can order as someone else. Take the id
       from `req.user`.
+- [ ] **Authenticate the order read endpoints.** `GET /order/:id` and
+      `GET /orderStatus/:id` have NO guard at all - no token, and no ownership check
+      inside the controller either - so any order in the system can be read by
+      guessing an integer id. Phase 5 made `/orderStatus/:id` the primary way a client
+      learns its outcome (202 + `statusUrl`), which promoted an open IDOR endpoint to
+      the main read path. Add `requireUser` and filter by owner in the service layer.
+- [ ] **Authenticate `POST /create-payment`.** payment-service mounts it with no guard.
+      Phase 5 kept it for manual retries, but it is open to anyone. The Stripe
+      idempotency key (`payment-<orderId>`) prevents a *double* charge; it does not
+      prevent a stranger triggering the *first* one.
 - [ ] **Service-to-service auth** for the remaining internal REST calls.
 - [ ] **Centralise config.** Validate env vars at boot with Zod and fail fast; no more
       `new Redis()` with no URL and no error handler.
