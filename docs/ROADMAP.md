@@ -132,16 +132,36 @@ handlers that already react correctly.
 - [x] **Client reads the result** by polling `GET /orderStatus/:id`; the 202 response
       carries a `statusUrl`. SSE/WebSocket push is still open.
 
-## Phase 6 - Observability
+## Phase 6 - Observability (DONE)
 
-- [ ] **Propagate `correlationId`** from the HTTP request through every event, and log it
-      everywhere. Without this an async flow is undebuggable.
-- [ ] **Structured JSON logs** with a consistent set of fields across services.
-- [ ] **OpenTelemetry traces** spanning HTTP and AMQP hops.
-- [ ] **Metrics**: events published/consumed/failed, handler latency, DLQ depth,
-      consumer lag.
-- [ ] **`/health` and `/ready`** on each service, reporting DB + broker + Redis.
-- [ ] **Alert on DLQ depth > 0.** A DLQ nobody watches is the same as dropping messages.
+See `docs/OBSERVABILITY.md`. Everything shared lives in
+`packages/shared-observability`; verified against a live broker with Postgres and
+RabbitMQ up and Redis deliberately down.
+
+- [x] **Propagate `correlationId`** from the HTTP request through every event, and log it
+      everywhere. Held in an `AsyncLocalStorage` store, so call sites do not pass it -
+      a plain `logger.error("Order not found")` comes out carrying the id, the
+      eventType, the queue and the delivery attempt.
+- [x] **Structured JSON logs** with a consistent set of fields across services.
+      `LOG_FORMAT=json`; pretty by default outside production. Four services had
+      byte-identical winston configs and auth-service had none.
+- [x] **OpenTelemetry traces** spanning HTTP and AMQP hops. Off unless
+      `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_TRACES_CONSOLE=1` is set, since without a
+      collector the spans have nowhere to go - Phase 7 is where one belongs.
+- [x] **Metrics**: events published/consumed by outcome, handler latency, outbox
+      backlog, queue depth and consumer count, HTTP latency. `GET /metrics`.
+- [x] **`/health` and `/ready`** on each service. Liveness checks nothing external on
+      purpose; readiness reports Postgres, RabbitMQ and Redis, with Redis non-critical.
+- [x] **Alert on DLQ depth > 0.** A queue monitor samples every 15s and logs a
+      structured `alert="dlq_not_empty"` the first time a dead-letter queue is
+      non-empty, re-arming when it drains.
+
+**Found while doing it** (both fixed): the contract-violation log passed meta with a
+`message` key, which overwrites winston's own `message` - so "contract violation on
+<queue>, dead-lettering" was being replaced by the bare validation error, losing the
+queue and the fact that the message had been dropped. And `logger.error("msg", str)`
+spread the string one character per key, because winston `Object.assign`s each extra
+argument.
 
 ## Phase 7 - Local environment and delivery
 
@@ -204,4 +224,4 @@ handlers that already react correctly.
 3. Phase 3 (idempotency, before retries are turned on in anger)
 4. Phase 7 partially - docker-compose early, so the whole thing is runnable while working
 5. Phase 4, then Phase 5 (the actual architecture change)
-6. Phases 6, 8, 9
+6. Phase 6 (observability), then 8 and 9
