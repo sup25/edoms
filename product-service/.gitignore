@@ -16,7 +16,6 @@ logs/
 *.log
 
 # Dependency lock files (optional, depending on your preference)
-package-lock.json
 yarn.lock
 
 # Test artifacts

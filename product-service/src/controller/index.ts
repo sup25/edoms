@@ -298,7 +298,7 @@ export const getProductByIdController = expressAsyncHandler(
 
 export const getProductBySlugController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {
-    const slug = req.params.slug;
+    const slug = String(req.params.slug);
     try {
       const product = await getProductBySlugService(slug);
       if (!product) {
