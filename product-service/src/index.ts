@@ -1,3 +1,5 @@
+// Tracing first: it patches modules as they are required.
+import "./tracing";
 import connectdb from "./config/db";
 import express from "express";
 import Product from "./model/product.model";
@@ -5,6 +7,7 @@ import router from "./routes";
 
 import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "./rabbitmq/subscriber";
+import { cacheWrite } from "./utils/cache";
 import redis from "./utils/redis";
 import { startStockDecrementEventService } from "./handler/handleStockDecrementEvent";
 import { startStockRollBackEventService } from "./handler/handleStockRollBackEvent";
@@ -12,6 +15,20 @@ import logger from "./utils/logger";
 import { closeBroker } from "./rabbitmq/connection";
 import OutboxEvent from "./model/outbox.model";
 import { startOutboxRelay, stopOutboxRelay } from "./rabbitmq/outbox";
+import {
+  correlationMiddleware,
+  healthHandler,
+  initMetrics,
+  metricsHandler,
+  readyHandler,
+  requestLogger,
+  stopTracing,
+} from "@edoms/shared-observability";
+import { dependencies } from "./observability";
+import { startQueueMonitor, stopQueueMonitor } from "./rabbitmq/queueMonitor";
+
+// Registered before anything can record to it.
+initMetrics("product-service");
 
 const app = express();
 (async () => {
@@ -23,6 +40,7 @@ const app = express();
     await OutboxEvent.sync({ alter: true });
     logger.info("Outbox table synced");
     startOutboxRelay();
+    startQueueMonitor();
   } catch (error) {
     logger.error("Error:", error);
     process.exit(1);
@@ -41,7 +59,13 @@ async function startService() {
       logger.info(`Received ${EventType.STOCK_UPDATED}`, {
         correlationId: meta.correlationId,
       });
-      await redis.setex(`stock:${payload.productId}`, 300, String(payload.stock));
+      // Non-fatal. Inventory is the source of truth and has already been
+      // updated; this only refreshes a cached copy. Letting it throw made a
+      // Redis outage dead-letter every stock update - 44 of them, which is
+      // how this was found.
+      await cacheWrite(`stock:${payload.productId}`, () =>
+        redis.setex(`stock:${payload.productId}`, 300, String(payload.stock))
+      );
       logger.info(`Cache refreshed for product ${payload.productId}`);
     },
     { queue: "product-service.stock-updated" }
@@ -54,7 +78,19 @@ startService();
 startStockDecrementEventService();
 startStockRollBackEventService();
 
+/*
+ * Correlation first: anything mounted above it logs without a correlationId,
+ * and an inbound x-correlation-id has to be honoured before a handler runs.
+ */
+app.use(correlationMiddleware());
+app.use(requestLogger({ logger }));
 app.use(express.json());
+
+/* Probes and metrics sit outside /api/v1 - they are for operators, not clients. */
+app.get("/health", healthHandler("product-service"));
+app.get("/ready", readyHandler("product-service", dependencies));
+app.get("/metrics", metricsHandler());
+
 app.use("/api/v1", router);
 const PORT = process.env.PORT || 5001;
 
@@ -73,7 +109,9 @@ async function shutdown(signal: string) {
   logger.info(`${signal} received, shutting down`);
   try {
     stopOutboxRelay();
+    stopQueueMonitor();
     await closeBroker();
+    await stopTracing();
     await connectdb.close();
   } catch (error) {
     logger.error("Error during shutdown", error);

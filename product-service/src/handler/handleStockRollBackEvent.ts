@@ -1,4 +1,5 @@
 import axios from "axios";
+import { cacheWrite } from "../utils/cache";
 import redis from "../utils/redis";
 import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
@@ -26,8 +27,11 @@ export async function handleStockRollBack(event: any) {
       );
       const rollbackStock = stockResponse.data.data?.toString() || "0"; // Convert to string for Redis
 
-      // Update Redis cache with the new stock value (TTL: 300 seconds)
-      await redis.setex(`stock:${productId}`, 300, rollbackStock);
+      // Non-fatal, for the same reason as the decrement handler: the
+      // rollback itself already happened in inventory.
+      await cacheWrite(`stock:${productId}`, () =>
+        redis.setex(`stock:${productId}`, 300, rollbackStock)
+      );
 
       logger.info(
         `Stock rollbacked for product ${productId} in Redis to: ${rollbackStock}`

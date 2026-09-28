@@ -34,6 +34,7 @@ export const adminRegisterController = expressAsyncHandler(
       res.status(STATUS_CODES.INTERNAL_SERVER_ERROR).json({
         success: false,
         message: "Something went wrong. Please try again later.",
+        data: null,
       });
     }
   }
@@ -66,6 +67,7 @@ export const userRegisterController = expressAsyncHandler(
       res.status(STATUS_CODES.INTERNAL_SERVER_ERROR).json({
         success: false,
         message: "Something went wrong. Please try again later.",
+        data: null,
       });
     }
   }

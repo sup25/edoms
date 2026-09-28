@@ -1,4 +1,5 @@
 import axios from "axios";
+import { cacheWrite } from "../utils/cache";
 import redis from "../utils/redis";
 import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "../rabbitmq/subscriber";
@@ -28,8 +29,12 @@ export async function handleStockDecrement(event: any) {
       );
       const updatedStock = stockResponse.data.data?.toString() || "0"; // Convert to string for Redis
 
-      // Update Redis cache with the new stock value (TTL: 300 seconds)
-      await redis.setex(`stock:${productId}`, 300, updatedStock);
+      // Non-fatal: inventory is already correct, so a Redis outage should
+      // leave the cache stale (the TTL bounds that) rather than dead-letter an
+      // event whose real work is done. The axios call above still throws.
+      await cacheWrite(`stock:${productId}`, () =>
+        redis.setex(`stock:${productId}`, 300, updatedStock)
+      );
 
       logger.info(
         `Stock updated for product ${productId} in Redis to: ${updatedStock}`

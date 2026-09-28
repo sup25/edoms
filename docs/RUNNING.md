@@ -43,8 +43,15 @@ WSL:
 wsl -d Ubuntu -e bash -lc "sudo apt update && sudo apt install -y redis-server && sudo service redis-server start"
 ```
 
-Without Redis, order-service hangs when creating an order: the controller awaits
-`redis.get()` before it does anything else.
+**Redis is optional.** It used to be load-bearing - order-service awaited
+`redis.get()` before doing anything, and product-service's client called
+`process.exit(1)` when it could not connect, which took the service (and its
+test run) down with it. Neither is true now: cache reads fall back to their
+source and cache writes are wrapped, so an outage costs a cold cache and
+nothing else.
+
+The whole system, including `npm run test:all` and `npm run smoke:all`, passes
+with Redis absent. Start it only if you want the cache path exercised.
 
 ### Databases
 
@@ -128,6 +135,44 @@ npm run trace:payloads
 
 The tracer binds its own temporary queues, so it receives **copies**. It never steals
 messages from the real consumers, and stopping it leaves nothing behind.
+
+---
+
+## 5b. Ask a service how it is doing
+
+Every service answers three operator endpoints, outside `/api/v1`:
+
+```bash
+curl -s localhost:5003/health          # alive?  (never fails on a dependency)
+curl -s localhost:5003/ready | jq      # can it serve? Postgres + RabbitMQ + Redis
+curl -s localhost:5003/metrics | grep ^edoms_
+```
+
+`/ready` returns `503` and names the failing dependency when a critical one is down.
+Redis is **not** critical — it is a cache, so `/ready` stays `200` with Redis stopped
+and simply reports it down. That is why the system above still works without Redis
+installed.
+
+Every log line carries the `correlationId` of the transaction that caused it, so one
+order can be pulled out of five services' output:
+
+```bash
+npm run dev 2>&1 | grep <correlationId>
+```
+
+The id is returned on every HTTP response as `x-correlation-id`, and you can supply
+your own to make an order easy to find:
+
+```bash
+curl -i -H "x-correlation-id: my-order-1" -X POST localhost:5003/api/v1/createorder ...
+```
+
+The two numbers worth watching are `edoms_outbox_failed_rows` and
+`edoms_queue_depth{kind="dead"}`. Both are durable, silent failures — the work
+stopped, nothing retries it, and no request is failing to tell you. A non-empty
+dead-letter queue also logs `alert="dlq_not_empty"` within 15 seconds.
+
+Full details, including traces: `docs/OBSERVABILITY.md`.
 
 ---
 
@@ -279,27 +324,38 @@ published messages are persistent and confirmed.
 
 ## Logs
 
-In development, logs go to the **console only**. `src/utils/logger.ts` adds the
-daily-rotate file transports only when `NODE_ENV === "production"`:
+All five services log through `packages/shared-observability`. Each service's
+`src/utils/logger.ts` is now a three-line re-export of it, so there is one place to
+change the format.
 
-```ts
-if (process.env.NODE_ENV === "production") {
-  logger.add(new DailyRotateFile({ filename: `${logDir}/combined-%DATE%.log`, ... }));
-}
+In development, logs go to the **console only**, in a readable format with the first
+8 characters of the correlationId as a prefix:
+
+```
+02:57:16.133 info  [1c47bb8e] Received inventory.reservation.failed {"eventType":...,"queue":...}
 ```
 
-So `npm run dev` streams everything to one terminal, prefixed by service, and nothing is
-written to disk. Any files already in a service's `logs/` directory are leftovers from an
-older production-mode run - check the date before trusting them.
+Daily-rotate file transports are added only when `NODE_ENV === "production"`, so
+`npm run dev` streams everything to one terminal and writes nothing to disk. Files
+already in a service's `logs/` directory are leftovers from an older run — check the
+date before trusting them.
 
-To get file logs while developing, start a service with `NODE_ENV=production`, or move
-the two `logger.add(...)` calls outside the `if`.
+| Want | Do |
+|---|---|
+| Machine-readable output | `LOG_FORMAT=json` |
+| Less noise | `LOG_LEVEL=info` |
+| Files while developing | `NODE_ENV=production` |
+
+> **`NODE_ENV` has to be exactly `production`.** A value like
+> `NODE_ENV=production npm run dev` — a shell command pasted into a `.env` — leaves
+> every production branch off, so file logging and the `info` default never engage,
+> silently. Check yours with `grep NODE_ENV */.env`.
 
 ## Common problems
 
 | Symptom | Cause |
 |---|---|
-| Order creation hangs | Redis is down. order-service awaits `redis.get()` first. |
+| ~~Order creation hangs~~ | No longer true. Phase 5 moved order-service onto a local product projection, and cache writes are now wrapped, so Redis being down costs a cold cache and nothing else. |
 | `ECONNREFUSED 127.0.0.1:5672` | RabbitMQ is down. Events cannot publish. |
 | Order stays `pending` forever after a failed payment | Was the `invetory_service` exchange typo, fixed in Phase 1. If it recurs, check both sides agree on the exchange name. |
 | Order sits in `pending` or `reserved` and then goes `cancelled` | The saga timeout worker expired it (default 5 min, `SAGA_TIMEOUT_MS`). Something upstream never responded - check the queues and the DLQs. |

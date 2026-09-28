@@ -1,3 +1,5 @@
+// Tracing first: it patches modules as they are required.
+import "./tracing";
 import sequelize from "./config/db";
 import express from "express";
 import Order from "./model/order.model";
@@ -13,6 +15,20 @@ import OutboxEvent from "./model/outbox.model";
 import { startOutboxRelay, stopOutboxRelay } from "./rabbitmq/outbox";
 import { startOrderSagaEventService } from "./handler/handleOrderSagaEvents";
 import { startSagaTimeoutWorker, stopSagaTimeoutWorker } from "./handler/orderSagaTimeout";
+import {
+  correlationMiddleware,
+  healthHandler,
+  initMetrics,
+  metricsHandler,
+  readyHandler,
+  requestLogger,
+  stopTracing,
+} from "@edoms/shared-observability";
+import { dependencies } from "./observability";
+import { startQueueMonitor, stopQueueMonitor } from "./rabbitmq/queueMonitor";
+
+// Registered before anything can record to it.
+initMetrics("order-service");
 
 const app = express();
 (async () => {
@@ -28,6 +44,7 @@ const app = express();
     startSagaTimeoutWorker();
     // Started only after the table exists, otherwise the first poll errors.
     startOutboxRelay();
+    startQueueMonitor();
   } catch (error) {
     logger.error("Connection failed:", error);
   }
@@ -39,7 +56,19 @@ startReservationFailedEventService();
 startProductProjectionService();
 startOrderSagaEventService();
 
+/*
+ * Correlation first: anything mounted above it logs without a correlationId,
+ * and an inbound x-correlation-id has to be honoured before a handler runs.
+ */
+app.use(correlationMiddleware());
+app.use(requestLogger({ logger }));
 app.use(express.json());
+
+/* Probes and metrics sit outside /api/v1 - they are for operators, not clients. */
+app.get("/health", healthHandler("order-service"));
+app.get("/ready", readyHandler("order-service", dependencies));
+app.get("/metrics", metricsHandler());
+
 app.use("/api/v1", router);
 const PORT = process.env.PORT || 5003;
 
@@ -59,9 +88,11 @@ async function shutdown(signal: string) {
   try {
     // Stop claiming new rows before the broker connection goes away.
     stopOutboxRelay();
+    stopQueueMonitor();
     stopSagaTimeoutWorker();
     await closeBroker();
     await sequelize.close();
+    await stopTracing();
   } catch (error) {
     logger.error("Error during shutdown", error);
   } finally {

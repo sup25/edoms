@@ -1,3 +1,5 @@
+// Tracing first: it patches modules as they are required.
+import "./tracing";
 import express from "express";
 import logger from "./utils/logger";
 import connectdb from "./config/db";
@@ -16,6 +18,20 @@ import { closeBroker } from "./rabbitmq/connection";
 import ProcessedEvent from "./model/processedEvent.model";
 import OutboxEvent from "./model/outbox.model";
 import { startOutboxRelay, stopOutboxRelay } from "./rabbitmq/outbox";
+import {
+  correlationMiddleware,
+  healthHandler,
+  initMetrics,
+  metricsHandler,
+  readyHandler,
+  requestLogger,
+  stopTracing,
+} from "@edoms/shared-observability";
+import { dependencies } from "./observability";
+import { startQueueMonitor, stopQueueMonitor } from "./rabbitmq/queueMonitor";
+
+// Registered before anything can record to it.
+initMetrics("inventory-service");
 
 const app = express();
 
@@ -34,6 +50,7 @@ const app = express();
     await OutboxEvent.sync({ alter: true });
     logger.info("Outbox table synced");
     startOutboxRelay();
+    startQueueMonitor();
   } catch (error) {
     logger.error("Error during DB setup: %o", error);
     process.exit(1);
@@ -47,7 +64,19 @@ startProductStockInitializationEventService();
 startProductStockDeletionEventService();
 startPaymentFailureEventService();
 
+/*
+ * Correlation first: anything mounted above it logs without a correlationId,
+ * and an inbound x-correlation-id has to be honoured before a handler runs.
+ */
+app.use(correlationMiddleware());
+app.use(requestLogger({ logger }));
 app.use(express.json());
+
+/* Probes and metrics sit outside /api/v1 - they are for operators, not clients. */
+app.get("/health", healthHandler("inventory-service"));
+app.get("/ready", readyHandler("inventory-service", dependencies));
+app.get("/metrics", metricsHandler());
+
 app.use("/api/v1", router);
 const PORT = process.env.PORT || 5002;
 
@@ -68,7 +97,9 @@ async function shutdown(signal: string) {
   logger.info(`${signal} received, shutting down`);
   try {
     stopOutboxRelay();
+    stopQueueMonitor();
     await closeBroker();
+    await stopTracing();
     await connectdb.close();
   } catch (error) {
     logger.error("Error during shutdown", error);

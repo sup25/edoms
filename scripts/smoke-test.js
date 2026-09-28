@@ -32,6 +32,8 @@ const PASSWORD = "Password123!";
 const QTY = 2;
 const START_STOCK = 100;
 
+const PRICE = 19.99;
+
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const DIM = "\x1b[2m";
@@ -97,7 +99,15 @@ function serviceEnv(service) {
  * change and then dies before the relay runs. If the relay is doing its job,
  * the event is published anyway.
  */
-async function insertOutboxRow(service, eventType, payload) {
+/**
+ * `delaySeconds` holds the row back from the relay for a moment.
+ *
+ * Without it the check that the row starts out `pending` is a race: the relay
+ * polls every second and can claim and publish the row between the INSERT and
+ * the SELECT that reads it back. Backdating availability makes "nothing has
+ * published this yet" true by construction instead of by luck.
+ */
+async function insertOutboxRow(service, eventType, payload, delaySeconds = 0) {
   const { Client } = requireFromServices("pg");
   const env = serviceEnv(service);
   const client = new Client({
@@ -111,11 +121,42 @@ async function insertOutboxRow(service, eventType, payload) {
     `INSERT INTO outbox_events
        (event_id, event_type, payload, correlation_id, causation_id,
         status, attempts, available_at, created_at)
-     VALUES ($1, $2, $3::jsonb, $4, NULL, 'pending', 0, NOW(), NOW())`,
-    [eventId, eventType, JSON.stringify(payload), `crash-corr-${Date.now()}`]
+     VALUES ($1, $2, $3::jsonb, $4, NULL, 'pending', 0,
+             NOW() + ($5 || ' seconds')::interval, NOW())`,
+    [eventId, eventType, JSON.stringify(payload), `crash-corr-${Date.now()}`,
+     String(delaySeconds)]
   );
   await client.end();
   return eventId;
+}
+
+/**
+ * Stops payment-service from charging an order, by planting the row it uses
+ * as its own idempotency guard.
+ *
+ * `handleOrderReservedEvent` skips any order that already has a payment, so
+ * this leaves the reservation sitting at `pending` for as long as a test
+ * needs. That state used to be reachable simply by being quick, but since
+ * Phase 5 payment charges the moment it sees the reservation and the window
+ * is about one Stripe round trip wide.
+ *
+ * Scaffolding, not a fixture: nothing asserts on this row. It exists so the
+ * compensation chain can be driven deliberately instead of being raced.
+ */
+async function blockAutoPayment(orderId) {
+  const { Client } = requireFromServices("pg");
+  const env = serviceEnv("payment-service");
+  const client = new Client({
+    host: env.DB_HOST, port: Number(env.DB_PORT || 5432),
+    user: env.DB_USERNAME, password: env.DB_PASSWORD, database: env.DB_NAME,
+  });
+  await client.connect();
+  await client.query(
+    `INSERT INTO payments (order_id, status, amount, payment_id, created_at)
+     VALUES ($1, 'success', 0, $2, NOW())`,
+    [String(orderId), `smoke-block-${orderId}`]
+  );
+  await client.end();
 }
 
 /** Plants an order row in a chosen state, for tests that need one in flight. */
@@ -247,7 +288,7 @@ async function register(role) {
   const product = await api(`${PRODUCT}/createproduct`, {
     method: "POST",
     headers: admin.headers,
-    body: JSON.stringify({ name: "Smoke Widget", price: 19.99, slug }),
+    body: JSON.stringify({ name: "Smoke Widget", price: PRICE, slug }),
   });
   const productId = product.body?.data?.id;
   if (!productId) throw new Error(`create product failed: ${JSON.stringify(product.body)}`);
@@ -275,18 +316,25 @@ async function register(role) {
     const fakeOrderId = 900000 + Math.floor(Math.random() * 90000);
     console.log(`
 ${BOLD}writing an outbox row directly${RESET} ${DIM}(no publish call)${RESET}`);
-    const eventId = await insertOutboxRow("order-service", "order.created", {
-      orderId: fakeOrderId,
-      // Prices are required: payment charges from them without calling back.
-      items: [{ productId, quantity: QTY, price: "19.99", name: "Smoke Widget" }],
-    });
+    const eventId = await insertOutboxRow(
+      "order-service",
+      "order.created",
+      {
+        orderId: fakeOrderId,
+        // Prices are required: payment charges from them without calling back.
+        items: [{ productId, quantity: QTY, price: "19.99", name: "Smoke Widget" }],
+      },
+      // Held back briefly so the relay cannot publish it before the check below.
+      2
+    );
     console.log(`${DIM}  event ${eventId} written as pending${RESET}`);
 
     const before = await outboxRowStatus("order-service", eventId);
     assert("row starts pending", before?.status, "pending");
 
-    // Relay polls every second; give it room plus consumer time.
-    await sleep(6000);
+    // 2s until the row becomes available, then the relay poll, then the
+    // consumer.
+    await sleep(8000);
 
     const after = await outboxRowStatus("order-service", eventId);
     assert("relay published it and marked it sent", after?.status, "sent");
@@ -305,6 +353,92 @@ ${GREEN}${BOLD}All checks passed.${RESET}  productId=${productId}
 `
         : `
 ${RED}${BOLD}${failures} check(s) failed.${RESET}
+`
+    );
+    process.exit(failures === 0 ? 0 : 1);
+  }
+
+  if (FAIL_MODE || DUPLICATE_MODE) {
+    /*
+     * Both of these need an order that is RESERVED but not yet paid, so a
+     * payment_failure can be injected into a live reservation.
+     *
+     * Placing the order through the API no longer reaches that state
+     * reliably: since Phase 5 payment charges as soon as it sees the
+     * reservation, so the order is `confirmed` a second later and the
+     * injected event correctly refuses to move a terminal order backwards.
+     * The test would then fail four assertions and, because smoke:all chains
+     * with &&, take the remaining modes with it.
+     *
+     * OVERSELL_MODE already works around this by planting an order rather
+     * than placing one. Same approach here, plus a planted payment row so
+     * payment-service's own guard holds the reservation open.
+     */
+    const orderId = await insertOrderRow("pending");
+    await blockAutoPayment(orderId);
+    console.log(`
+${BOLD}injecting order_created for order ${orderId}${RESET} ${DIM}(auto-payment blocked)${RESET}`);
+    await publishOrderCreated(orderId, productId, QTY);
+    await sleep(4000);
+
+    const reserved = await api(`${INVENTORY}/stock/${productId}`);
+    assert("stock decremented by reservation", reserved.body?.data, START_STOCK - QTY);
+
+    const inFlight = await api(`${ORDER}/orderStatus/${orderId}`);
+    assert(
+      "order is reserved and still unpaid",
+      ["pending", "reserved"].includes(inFlight.body?.data),
+      true
+    );
+
+    if (DUPLICATE_MODE) {
+      // Defect #8: the SAME messageId delivered twice must only credit once.
+      const messageId = `dup-test-${Date.now()}`;
+      console.log(`
+${BOLD}publishing payment_failure TWICE with messageId=${messageId}${RESET}`);
+
+      await publishPaymentFailure(orderId, messageId);
+      await sleep(3000);
+      const afterFirst = await api(`${INVENTORY}/stock/${productId}`);
+      assert("first delivery restores stock", afterFirst.body?.data, START_STOCK);
+
+      await publishPaymentFailure(orderId, messageId);
+      await sleep(3000);
+      const afterSecond = await api(`${INVENTORY}/stock/${productId}`);
+      assert(
+        "duplicate delivery does NOT inflate stock (defect #7/#8)",
+        afterSecond.body?.data,
+        START_STOCK
+      );
+
+      const status = await api(`${ORDER}/orderStatus/${orderId}`);
+      assert("order failed exactly once", status.body?.data, "failed");
+    } else {
+      console.log(`
+${BOLD}publishing payment_failure${RESET}`);
+      console.log(`${DIM}  chain: payment_failure -> inventory releases stock${RESET}`);
+      console.log(`${DIM}         -> order_failed -> order marks FAILED${RESET}`);
+      console.log(`${DIM}  (this chain was dead before Phase 1 - the exchange typo)${RESET}`);
+      await publishPaymentFailure(orderId);
+      await sleep(3000);
+
+      const rolledBack = await api(`${INVENTORY}/stock/${productId}`);
+      assert("stock rolled back to original", rolledBack.body?.data, START_STOCK);
+
+      const failed = await api(`${ORDER}/orderStatus/${orderId}`);
+      assert("order marked FAILED (the Phase 1 typo fix)", failed.body?.data, "failed");
+
+      const res = await api(`${INVENTORY}/reservedstock/${orderId}`);
+      assert("reservation canceled", res.body?.data?.[0]?.status, "canceled");
+    }
+
+    console.log(
+      failures === 0
+        ? `
+${GREEN}${BOLD}All checks passed.${RESET}  productId=${productId} orderId=${orderId}
+`
+        : `
+${RED}${BOLD}${failures} check(s) failed.${RESET}  productId=${productId} orderId=${orderId}
 `
     );
     process.exit(failures === 0 ? 0 : 1);
@@ -380,87 +514,33 @@ ${RED}${BOLD}${failures} check(s) failed.${RESET}  productId=${productId}
     true
   );
 
-  if (DUPLICATE_MODE) {
-    // Defect #8: the SAME messageId delivered twice must only credit once.
-    const messageId = `dup-test-${Date.now()}`;
-    console.log(`
-${BOLD}publishing payment_failure TWICE with messageId=${messageId}${RESET}`);
-
-    await publishPaymentFailure(orderId, messageId);
-    await sleep(3000);
-    const afterFirst = await api(`${INVENTORY}/stock/${productId}`);
-    assert("first delivery restores stock", afterFirst.body?.data, START_STOCK);
-
-    await publishPaymentFailure(orderId, messageId);
-    await sleep(3000);
-    const afterSecond = await api(`${INVENTORY}/stock/${productId}`);
-    assert(
-      "duplicate delivery does NOT inflate stock (defect #7/#8)",
-      afterSecond.body?.data,
-      START_STOCK
-    );
-
-    const status = await api(`${ORDER}/orderStatus/${orderId}`);
-    assert("order failed exactly once", status.body?.data, "failed");
-
-    console.log(
-      failures === 0
-        ? `
-${GREEN}${BOLD}All checks passed.${RESET}  productId=${productId} orderId=${orderId}
-`
-        : `
-${RED}${BOLD}${failures} check(s) failed.${RESET}
-`
-    );
-    process.exit(failures === 0 ? 0 : 1);
-  }
-
-  if (!FAIL_MODE) {
-    /*
-     * NOTHING is sent here. Before Phase 5 the client had to POST
-     * /create-payment to move the saga along; payment now reacts to
-     * inventory.order.reserved on its own. If this passes without an HTTP
-     * call, the system is genuinely event-driven.
-     */
-    console.log(`
+  /*
+   * NOTHING is sent here. Before Phase 5 the client had to POST
+   * /create-payment to move the saga along; payment now reacts to
+   * inventory.order.reserved on its own. If this passes without an HTTP
+   * call, the system is genuinely event-driven.
+   */
+  console.log(`
 ${BOLD}waiting for the saga to complete by itself${RESET}`);
-    console.log(`${DIM}  (no payment request is sent - payment reacts to the reservation)${RESET}`);
+  console.log(`${DIM}  (no payment request is sent - payment reacts to the reservation)${RESET}`);
 
-    let status = "";
-    const deadline = Date.now() + 40_000;
-    while (Date.now() < deadline) {
-      const r = await api(`${ORDER}/orderStatus/${orderId}`);
-      status = r.body?.data;
-      if (status === "confirmed" || status === "failed" || status === "cancelled") break;
-      await sleep(1000);
-    }
-
-    assert("order reached CONFIRMED with no client involvement", status, "confirmed");
-
-    const res = await api(`${INVENTORY}/reservedstock/${orderId}`);
-    assert("reservation confirmed", res.body?.data?.[0]?.status, "confirmed");
-
-    const finalStock = await api(`${INVENTORY}/stock/${productId}`);
-    assert("stock stays decremented", finalStock.body?.data, START_STOCK - QTY);
-
-  } else {
-    // --- failure path: compensation chain ---
-    console.log(`\n${BOLD}publishing payment_failure${RESET}`);
-    console.log(`${DIM}  chain: payment_failure -> inventory releases stock${RESET}`);
-    console.log(`${DIM}         -> order_failed -> order marks FAILED${RESET}`);
-    console.log(`${DIM}  (this chain was dead before Phase 1 - the exchange typo)${RESET}`);
-    await publishPaymentFailure(orderId);
-
-    await sleep(3000);
-    const rolledBack = await api(`${INVENTORY}/stock/${productId}`);
-    assert("stock rolled back to original", rolledBack.body?.data, START_STOCK);
-
-    const failed = await api(`${ORDER}/orderStatus/${orderId}`);
-    assert("order marked FAILED (the Phase 1 typo fix)", failed.body?.data, "failed");
-
-    const res = await api(`${INVENTORY}/reservedstock/${orderId}`);
-    assert("reservation canceled", res.body?.data?.[0]?.status, "canceled");
+  let status = "";
+  const deadline = Date.now() + 40_000;
+  while (Date.now() < deadline) {
+    const r = await api(`${ORDER}/orderStatus/${orderId}`);
+    status = r.body?.data;
+    if (status === "confirmed" || status === "failed" || status === "cancelled") break;
+    await sleep(1000);
   }
+
+  assert("order reached CONFIRMED with no client involvement", status, "confirmed");
+
+  const res = await api(`${INVENTORY}/reservedstock/${orderId}`);
+  assert("reservation confirmed", res.body?.data?.[0]?.status, "confirmed");
+
+  const finalStock = await api(`${INVENTORY}/stock/${productId}`);
+  assert("stock stays decremented", finalStock.body?.data, START_STOCK - QTY);
+
 
   console.log(
     failures === 0

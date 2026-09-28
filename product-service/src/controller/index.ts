@@ -12,6 +12,7 @@ import { STATUS_CODES } from "../constants";
 import { EventType } from "@edoms/shared-events";
 import connectdb from "../config/db";
 import { publishToOutbox } from "../rabbitmq/outbox";
+import { cacheWrite } from "../utils/cache";
 import redis from "../utils/redis";
 import axios from "axios";
 import { INVENTORY_SERVICE_URL } from "../config/apiEndpoints";
@@ -115,12 +116,20 @@ export const getAllProductsController = expressAsyncHandler(
 
           logger.info("🟢 Fetched all stock from Inventory Service");
 
-          // Cache all fetched stock in Redis
-          const redisSetPromises = Object.entries(stockMap).map(
-            ([productId, stock]) =>
-              redis.setex(`stock:${productId}`, 300, stock.toString())
+          // Cache all fetched stock in Redis.
+          //
+          // Wrapped because this sits inside the inventory try-block: a Redis
+          // failure here would be caught by the `inventoryError` handler
+          // below and reported as "inventory service unavailable", sending
+          // every product's stock to 0 even though inventory had just
+          // answered correctly.
+          await cacheWrite("stock warm-up", () =>
+            Promise.all(
+              Object.entries(stockMap).map(([productId, stock]) =>
+                redis.setex(`stock:${productId}`, 300, stock.toString())
+              )
+            )
           );
-          await Promise.all(redisSetPromises);
         } catch (inventoryError) {
           logger.error(
             "Error fetching stock from Inventory Service:",

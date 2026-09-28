@@ -46,14 +46,17 @@ const mockUser = {
   destroy: jest.fn(),
 };
 
-let server: any;
-
+/*
+ * No app.listen() here.
+ *
+ * Every request below goes through `request(app)`, and supertest starts its
+ * own server on an ephemeral port for each one - so the listener this used to
+ * open on 5000 was never used, and it made the suite fail with EADDRINUSE
+ * whenever auth-service was actually running. That went unnoticed while
+ * nothing ran these tests; `npm run test:all` does now.
+ */
 beforeAll(async () => {
   process.env.JWT_SECRET = "test-secret";
-
-  server = app.listen(5000, () => {
-    console.log("Test server running on port 5000");
-  });
 
   // Mock bcrypt with proper typing
   jest
@@ -75,12 +78,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   jest.restoreAllMocks();
-
-  await new Promise<void>((resolve) => {
-    server.close(() => {
-      resolve();
-    });
-  });
 
   process.removeAllListeners("SIGTERM");
   process.removeAllListeners("SIGINT");
