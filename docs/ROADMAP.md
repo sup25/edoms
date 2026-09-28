@@ -163,20 +163,41 @@ queue and the fact that the message had been dropped. And `logger.error("msg", s
 spread the string one character per key, because winston `Object.assign`s each extra
 argument.
 
-## Phase 7 - Local environment and delivery
+## Phase 7 - Local environment and delivery (DONE, one item deliberately skipped)
 
-- [ ] **`docker-compose.yml`** at the root: postgres (five DBs), rabbitmq with the
-      management UI, redis, and all five services. Currently there is no compose file and
-      every service is started by hand.
-- [ ] **Dockerfile per service** (multi-stage).
-- [ ] **`.env.example` per service** - the README tells you to copy one, but none exist.
-- [ ] **Sequelize migrations.** Replace `sync({ alter: true })` on boot, which silently
-      mutates the schema at runtime.
-- [ ] **npm workspaces** at the root so the shared events package is linked, with one
-      root `npm run dev`.
-- [ ] **GitHub Actions**: typecheck, lint, test, build on every PR.
-- [ ] **Graceful shutdown** - drain in-flight messages, close channels and the DB pool on
-      `SIGTERM`.
+- [x] **`docker-compose.yml`** at the root: postgres with the five databases created
+      by an init script, rabbitmq with the management UI, redis, and all five
+      services. Health checks gate startup, so a service never runs its first
+      migration against a server that is still initialising. Redis is deliberately
+      NOT a dependency of any service - it is a cache, the system runs without it,
+      and declaring a hard dependency would claim otherwise.
+- [x] **Dockerfile (multi-stage).** One file parameterised by `SERVICE` rather than
+      five near-identical copies, which would drift. The build context is the repo
+      root, because each service depends on the two shared packages through
+      `file:../packages/...` and npm cannot resolve those from a service-scoped
+      context. Runs as the `node` user, not root.
+- [x] **`.env.example` per service** (landed in Phase 6), plus a root one for compose.
+- [x] **Sequelize migrations.** umzug, recorded in `migrations_meta`. See the note
+      below: `sync({ alter: true })` had done real damage, not just theoretical.
+- [ ] **npm workspaces.** *Deliberately not done.* Phase 2 chose `file:` links over a
+      root workspace because a workspace reinstall would churn five working
+      `node_modules`, and that reasoning still holds - more so now that the
+      Dockerfile installs per service anyway, which is what workspaces would
+      mostly have bought. Revisit if the shared packages multiply.
+- [x] **GitHub Actions**: typecheck, test and build per service in a matrix, plus a
+      docker build per service and a compose-file validation. No lint step - there
+      is no linter configured in this repo to run.
+- [x] **Graceful shutdown** - landed in Phase 1 for the four broker services, and in
+      Phase 6 for auth-service.
+
+**What `sync({ alter: true })` had actually done.** Sequelize cannot recognise a
+unique constraint it created on an earlier boot, so it added another every time a
+service started. Across the five databases there were **506 indexes where about
+fifteen were wanted** - 386 identical unique constraints on `Products.slug` alone,
+and 18 to 38 on each service's `outbox_events.event_id`. Every `npm run dev` added
+more, and each one is maintained on every insert, so the outbox relay was paying
+for dozens of copies of the same uniqueness check. Migration `0002` removes them;
+the count is 35 now and stays there.
 
 ## Phase 8 - Security and hardening (DONE)
 
