@@ -7,6 +7,7 @@ import router from "./routes";
 
 import { EventType } from "@edoms/shared-events";
 import { subscribeEvent } from "./rabbitmq/subscriber";
+import { cacheWrite } from "./utils/cache";
 import redis from "./utils/redis";
 import { startStockDecrementEventService } from "./handler/handleStockDecrementEvent";
 import { startStockRollBackEventService } from "./handler/handleStockRollBackEvent";
@@ -58,7 +59,13 @@ async function startService() {
       logger.info(`Received ${EventType.STOCK_UPDATED}`, {
         correlationId: meta.correlationId,
       });
-      await redis.setex(`stock:${payload.productId}`, 300, String(payload.stock));
+      // Non-fatal. Inventory is the source of truth and has already been
+      // updated; this only refreshes a cached copy. Letting it throw made a
+      // Redis outage dead-letter every stock update - 44 of them, which is
+      // how this was found.
+      await cacheWrite(`stock:${payload.productId}`, () =>
+        redis.setex(`stock:${payload.productId}`, 300, String(payload.stock))
+      );
       logger.info(`Cache refreshed for product ${payload.productId}`);
     },
     { queue: "product-service.stock-updated" }
