@@ -3,6 +3,7 @@ import { createLogger as createWinstonLogger, format, transports } from "winston
 import type { Logger } from "winston";
 import DailyRotateFile from "winston-daily-rotate-file";
 import { getContext } from "./context";
+import { activeTraceIds } from "./traceIds";
 
 export interface LoggerOptions {
   /** Service name, stamped on every line so one aggregated stream stays separable. */
@@ -84,7 +85,11 @@ const normaliseArgs = format((info) => {
   return info;
 });
 
-/** Merges the ambient request/event context into every line. */
+/**
+ * Merges the ambient request/event context into every line, plus the ids of
+ * the span in progress when tracing is on - so a log line leads to its trace
+ * and back again.
+ */
 const withContext = format((info) => {
   const context = getContext();
   if (context) {
@@ -92,6 +97,11 @@ const withContext = format((info) => {
       if (info[key] === undefined) info[key] = value;
     }
   }
+
+  const { traceId, spanId } = activeTraceIds();
+  if (traceId && info.traceId === undefined) info.traceId = traceId;
+  if (spanId && info.spanId === undefined) info.spanId = spanId;
+
   return info;
 });
 

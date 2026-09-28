@@ -47,3 +47,10 @@ export {
   healthHandler,
   readyHandler,
 } from "./health";
+
+export {
+  TracingOptions,
+  startTracing,
+  stopTracing,
+  activeTraceIds,
+} from "./tracing";

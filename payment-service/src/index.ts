@@ -1,3 +1,5 @@
+// Tracing first: it patches modules as they are required.
+import "./tracing";
 import express from "express";
 import connectdb from "./config/db";
 import Payment from "./model/payment.model";
@@ -14,6 +16,7 @@ import {
   metricsHandler,
   readyHandler,
   requestLogger,
+  stopTracing,
 } from "@edoms/shared-observability";
 import { dependencies } from "./observability";
 import { startQueueMonitor, stopQueueMonitor } from "./rabbitmq/queueMonitor";
@@ -72,6 +75,7 @@ async function shutdown(signal: string) {
     stopOutboxRelay();
     stopQueueMonitor();
     await closeBroker();
+    await stopTracing();
     await connectdb.close();
   } catch (error) {
     logger.error("Error during shutdown", error);

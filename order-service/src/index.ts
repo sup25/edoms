@@ -1,3 +1,5 @@
+// Tracing first: it patches modules as they are required.
+import "./tracing";
 import sequelize from "./config/db";
 import express from "express";
 import Order from "./model/order.model";
@@ -20,6 +22,7 @@ import {
   metricsHandler,
   readyHandler,
   requestLogger,
+  stopTracing,
 } from "@edoms/shared-observability";
 import { dependencies } from "./observability";
 import { startQueueMonitor, stopQueueMonitor } from "./rabbitmq/queueMonitor";
@@ -89,6 +92,7 @@ async function shutdown(signal: string) {
     stopSagaTimeoutWorker();
     await closeBroker();
     await sequelize.close();
+    await stopTracing();
   } catch (error) {
     logger.error("Error during shutdown", error);
   } finally {
