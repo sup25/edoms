@@ -43,8 +43,15 @@ WSL:
 wsl -d Ubuntu -e bash -lc "sudo apt update && sudo apt install -y redis-server && sudo service redis-server start"
 ```
 
-Without Redis, order-service hangs when creating an order: the controller awaits
-`redis.get()` before it does anything else.
+**Redis is optional.** It used to be load-bearing - order-service awaited
+`redis.get()` before doing anything, and product-service's client called
+`process.exit(1)` when it could not connect, which took the service (and its
+test run) down with it. Neither is true now: cache reads fall back to their
+source and cache writes are wrapped, so an outage costs a cold cache and
+nothing else.
+
+The whole system, including `npm run test:all` and `npm run smoke:all`, passes
+with Redis absent. Start it only if you want the cache path exercised.
 
 ### Databases
 
@@ -348,7 +355,7 @@ date before trusting them.
 
 | Symptom | Cause |
 |---|---|
-| Order creation hangs | Redis is down. order-service awaits `redis.get()` first. |
+| ~~Order creation hangs~~ | No longer true. Phase 5 moved order-service onto a local product projection, and cache writes are now wrapped, so Redis being down costs a cold cache and nothing else. |
 | `ECONNREFUSED 127.0.0.1:5672` | RabbitMQ is down. Events cannot publish. |
 | Order stays `pending` forever after a failed payment | Was the `invetory_service` exchange typo, fixed in Phase 1. If it recurs, check both sides agree on the exchange name. |
 | Order sits in `pending` or `reserved` and then goes `cancelled` | The saga timeout worker expired it (default 5 min, `SAGA_TIMEOUT_MS`). Something upstream never responded - check the queues and the DLQs. |
