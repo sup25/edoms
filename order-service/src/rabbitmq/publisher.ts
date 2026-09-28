@@ -4,6 +4,7 @@ import {
   buildEnvelope,
   validatePayload,
 } from "@edoms/shared-events";
+import { eventsPublished } from "@edoms/shared-observability";
 import { getPublishChannel } from "./connection";
 import logger from "../utils/logger";
 
@@ -81,6 +82,10 @@ export async function publish<T>(
           (error) => (error ? reject(error) : resolve())
         );
       });
+
+      // Counted after the broker confirms, not after channel.publish() returns -
+      // publish() only buffers, which is the distinction Phase 1 was about.
+      eventsPublished.labels(eventType, exchange).inc();
 
       logger.info(`Published ${eventType}`, {
         eventId: envelope.eventId,

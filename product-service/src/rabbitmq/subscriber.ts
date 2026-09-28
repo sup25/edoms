@@ -9,7 +9,14 @@ import {
 } from "@edoms/shared-events";
 import { createConsumerChannel, registerResubscriber } from "./connection";
 import { assertEventTopology, deliveryAttempt } from "./topology";
+import {
+  addContext,
+  eventHandlerDuration,
+  eventsConsumed,
+  runWithContext,
+} from "@edoms/shared-observability";
 import logger from "../utils/logger";
+import { registerQueue } from "./queueMonitor";
 
 export interface SubscribeOptions {
   /** Durable queue name, e.g. "order-service.reservation-confirmed". */
@@ -93,59 +100,113 @@ export async function subscribeEvent<T = unknown>(
         if (!msg) return;
         const attempt = deliveryAttempt(msg.properties.headers);
 
-        let envelope: EventEnvelope;
-        let payload: T;
-        try {
-          envelope = parseEnvelope(msg.content.toString());
-          if (envelope.eventType !== eventType) {
-            throw new EventContractError(
-              `expected ${eventType} on ${queue}, got ${envelope.eventType}`
-            );
-          }
-          payload = validatePayload<T>(eventType, envelope.payload);
-        } catch (error: unknown) {
-          // Contract violations are permanent. Retrying wastes capacity.
-          logger.error(
-            `Contract violation on ${queue}, dead-lettering`,
-            error instanceof EventContractError
-              ? { message: error.message, detail: error.detail }
-              : error
-          );
-          deadLetter(msg, "contract-violation");
-          return;
-        }
+        /*
+         * The context is established BEFORE the envelope is parsed, seeded
+         * from the AMQP properties.
+         *
+         * Everything below - and everything it awaits - then runs inside it,
+         * so each log line carries the correlationId of the transaction that
+         * caused it without any handler passing it anywhere. This is the half
+         * of "propagate the correlationId" that Phase 2 left open: the id was
+         * already on the wire, just not in the logs.
+         *
+         * Parsing is inside rather than before it because a malformed event is
+         * the case where you most need to know which queue and which message,
+         * and it is dead-lettered on first delivery - so that one log line
+         * would otherwise be the only one with nothing to trace it by.
+         */
+        await runWithContext(
+          {
+            correlationId: msg.properties.correlationId,
+            messageId: msg.properties.messageId,
+            eventType,
+            queue: topology.queue,
+            attempt,
+          },
+          async () => {
+            let envelope: EventEnvelope;
+            let payload: T;
+            try {
+              envelope = parseEnvelope(msg.content.toString());
+              if (envelope.eventType !== eventType) {
+                throw new EventContractError(
+                  `expected ${eventType} on ${queue}, got ${envelope.eventType}`
+                );
+              }
+              payload = validatePayload<T>(eventType, envelope.payload);
+            } catch (error: unknown) {
+              // Contract violations are permanent. Retrying wastes capacity.
+              // `reason`, not `message`: a meta key called `message` overwrites
+              // the log line's own message, which used to replace "contract
+              // violation on <queue>, dead-lettering" with the bare validation
+              // error - losing both the queue and the fact that it was dropped.
+              logger.error(`Contract violation on ${queue}, dead-lettering`, {
+                reason:
+                  error instanceof Error ? error.message : String(error),
+                ...(error instanceof EventContractError && error.detail !== undefined
+                  ? { detail: error.detail }
+                  : {}),
+              });
+              eventsConsumed.labels(eventType, topology.queue, "contract-violation").inc();
+              deadLetter(msg, "contract-violation");
+              return;
+            }
 
-        const meta: EventMeta = {
-          messageId: msg.properties.messageId || envelope.eventId,
-          correlationId: envelope.correlationId,
-          causationId: envelope.eventId,
-          attempt,
-          queue: topology.queue,
-        };
+            const meta: EventMeta = {
+              messageId: msg.properties.messageId || envelope.eventId,
+              correlationId: envelope.correlationId,
+              causationId: envelope.eventId,
+              attempt,
+              queue: topology.queue,
+            };
 
-        try {
-          await handler(payload, meta, envelope as EventEnvelope<T>);
-          channel.ack(msg);
-        } catch (error: unknown) {
-          if (attempt >= maxDeliveries) {
-            logger.error(
-              `Handler for ${eventType} on ${queue} failed after ${attempt} attempts ` +
-                `(correlationId=${meta.correlationId}), dead-lettering`,
-              error
-            );
-            deadLetter(msg, "max-deliveries-exceeded");
-            return;
+            // The envelope is the authority once it parses; the AMQP property
+            // is only a hint, and a legacy message has none at all.
+            addContext({
+              correlationId: meta.correlationId,
+              causationId: meta.causationId,
+              messageId: meta.messageId,
+            });
+
+            const startedAt = process.hrtime.bigint();
+            const elapsed = (): number =>
+              Number(process.hrtime.bigint() - startedAt) / 1e9;
+
+            try {
+              await handler(payload, meta, envelope as EventEnvelope<T>);
+              channel.ack(msg);
+              eventHandlerDuration.labels(eventType, topology.queue, "ack").observe(elapsed());
+              eventsConsumed.labels(eventType, topology.queue, "ack").inc();
+            } catch (error: unknown) {
+              if (attempt >= maxDeliveries) {
+                logger.error(
+                  `Handler for ${eventType} on ${queue} failed after ${attempt} attempts, dead-lettering`,
+                  error
+                );
+                eventHandlerDuration
+                  .labels(eventType, topology.queue, "dead-lettered")
+                  .observe(elapsed());
+                eventsConsumed.labels(eventType, topology.queue, "dead-lettered").inc();
+                deadLetter(msg, "max-deliveries-exceeded");
+                return;
+              }
+              logger.warn(
+                `Handler for ${eventType} on ${queue} failed (attempt ${attempt}/${maxDeliveries}), ` +
+                  `retrying in ${retryDelayMs}ms`,
+                error
+              );
+              eventHandlerDuration.labels(eventType, topology.queue, "retried").observe(elapsed());
+              eventsConsumed.labels(eventType, topology.queue, "retried").inc();
+              channel.nack(msg, false, false);
+            }
           }
-          logger.warn(
-            `Handler for ${eventType} on ${queue} failed (attempt ${attempt}/${maxDeliveries}, ` +
-              `correlationId=${meta.correlationId}), retrying in ${retryDelayMs}ms`,
-            error
-          );
-          channel.nack(msg, false, false);
-        }
+        );
       },
       { noAck: false }
     );
+
+    // So the queue monitor knows which queues belong to this service.
+    registerQueue(topology);
 
     logger.info(`Subscribed to ${eventType} on ${exchange} via queue ${topology.queue}`);
   };

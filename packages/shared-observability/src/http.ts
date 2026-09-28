@@ -1,4 +1,4 @@
-import type { NextFunction, Request, RequestHandler, Response } from "express";
+import type { ObsHandler, ObsRequest, ObsResponse, ObsNext } from "./express";
 import { randomUUID } from "crypto";
 import type { Logger } from "winston";
 import { runWithContext } from "./context";
@@ -19,8 +19,8 @@ export const REQUEST_ID_HEADER = "x-request-id";
  * Mount this BEFORE the body parser and the routes - anything above it logs
  * without a correlationId.
  */
-export function correlationMiddleware(): RequestHandler {
-  return (req: Request, res: Response, next: NextFunction): void => {
+export function correlationMiddleware(): ObsHandler {
+  return (req: ObsRequest, res: ObsResponse, next: ObsNext): void => {
     const inbound = req.header(CORRELATION_HEADER);
     const correlationId = inbound && inbound.trim() ? inbound.trim() : randomUUID();
     const requestId = req.header(REQUEST_ID_HEADER)?.trim() || randomUUID();
@@ -39,10 +39,10 @@ export interface RequestLoggerOptions {
 }
 
 /** Logs one line per completed request and records its latency. */
-export function requestLogger(options: RequestLoggerOptions): RequestHandler {
+export function requestLogger(options: RequestLoggerOptions): ObsHandler {
   const { logger, ignore = ["/health", "/ready", "/metrics"] } = options;
 
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return (req: ObsRequest, res: ObsResponse, next: ObsNext): void => {
     if (ignore.includes(req.path)) return next();
     const startedAt = process.hrtime.bigint();
 
@@ -51,9 +51,9 @@ export function requestLogger(options: RequestLoggerOptions): RequestHandler {
       // req.route is only populated once a route has matched; the raw path of
       // an unmatched request would give every 404 its own label value and
       // blow up metric cardinality.
-      const route = (req.route?.path as string | undefined)
-        ? `${req.baseUrl}${req.route.path}`
-        : "unmatched";
+      const routePath = req.route?.path;
+      const route =
+        typeof routePath === "string" ? `${req.baseUrl}${routePath}` : "unmatched";
 
       httpRequestDuration
         .labels(req.method, route, String(res.statusCode))
@@ -73,10 +73,13 @@ export function requestLogger(options: RequestLoggerOptions): RequestHandler {
 }
 
 /** `GET /metrics` in Prometheus exposition format. */
-export function metricsHandler(): RequestHandler {
-  return (_req: Request, res: Response): void => {
+export function metricsHandler(): ObsHandler {
+  return (_req: ObsRequest, res: ObsResponse): void => {
     void metricsText().then(
-      (body) => res.setHeader("Content-Type", metricsContentType).send(body),
+      (body) => {
+        res.setHeader("Content-Type", metricsContentType);
+        res.send(body);
+      },
       () => res.status(500).send("# metrics collection failed\n")
     );
   };

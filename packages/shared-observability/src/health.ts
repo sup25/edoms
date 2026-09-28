@@ -1,4 +1,4 @@
-import type { Request, RequestHandler, Response } from "express";
+import type { ObsHandler, ObsRequest, ObsResponse } from "./express";
 
 export type CheckStatus = "up" | "down";
 
@@ -55,9 +55,9 @@ async function runCheck(dependency: DependencyCheck): Promise<CheckResult> {
  * that fails liveness, and restarting a service because Postgres is down turns
  * one outage into a crash loop.
  */
-export function healthHandler(service: string): RequestHandler {
+export function healthHandler(service: string): ObsHandler {
   const startedAt = Date.now();
-  return (_req: Request, res: Response): void => {
+  return (_req: ObsRequest, res: ObsResponse): void => {
     res.status(200).json({
       status: "ok",
       service,
@@ -72,8 +72,8 @@ export function healthHandler(service: string): RequestHandler {
  * Fails with 503 when a critical dependency is down, which takes the instance
  * out of the load balancer without killing it.
  */
-export function readyHandler(service: string, dependencies: DependencyCheck[]): RequestHandler {
-  return (_req: Request, res: Response): void => {
+export function readyHandler(service: string, dependencies: DependencyCheck[]): ObsHandler {
+  return (_req: ObsRequest, res: ObsResponse): void => {
     void Promise.all(
       dependencies.map(async (dependency) => [dependency.name, await runCheck(dependency)] as const)
     ).then((entries) => {

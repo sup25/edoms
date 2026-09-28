@@ -17,17 +17,30 @@ export interface LoggerOptions {
   pretty?: boolean;
 }
 
+const SPLAT = Symbol.for("splat") as unknown as symbol;
+/** printf-style tokens winston interpolates itself; leave those args alone. */
+const PLACEHOLDER = /%[sdifjoO%]/;
+
 /**
- * Winston's `format.errors({ stack: true })` only unwraps an Error passed as
- * the FIRST argument. Every existing call site in this repo is
- * `logger.error("something failed", error)`, where the Error lands in meta and
- * winston stringifies it to `{}` - the stack is silently dropped, which is the
- * exact moment you most need it.
+ * Makes winston handle the two argument shapes this repo actually uses.
+ *
+ * Both are cases where stock winston quietly produces the wrong thing:
+ *
+ * 1. `logger.error("msg", err)` - `format.errors({ stack: true })` only
+ *    unwraps an Error passed FIRST. In meta it stringifies to `{}`, so the
+ *    stack is dropped at exactly the moment it matters. It is promoted to an
+ *    `err` field here instead.
+ *
+ * 2. `logger.error("msg", someString)` - winston's splat format does
+ *    `Object.assign(info, value)` on each extra argument. Assigning a STRING
+ *    spreads it one character per key, so `"ECONNREFUSED"` logs as
+ *    `{"0":"E","1":"C",...}`. Primitives are appended to the message instead.
+ *
+ * Object arguments are left in place, so `logger.info("msg", { orderId })`
+ * still merges as meta the usual way.
  */
-const normaliseErrors = format((info) => {
-  const splat = (info as Record<symbol, unknown>)[
-    Symbol.for("splat") as unknown as symbol
-  ] as unknown[] | undefined;
+const normaliseArgs = format((info) => {
+  const record = info as Record<string | symbol, unknown>;
 
   const promote = (value: unknown): boolean => {
     if (!(value instanceof Error)) return false;
@@ -40,9 +53,33 @@ const normaliseErrors = format((info) => {
     return true;
   };
 
-  if (Array.isArray(splat)) splat.forEach(promote);
-  promote((info as { error?: unknown }).error);
-  if (info.error instanceof Error) delete info.error;
+  promote(record.error);
+  if (record.error instanceof Error) delete record.error;
+
+  const splat = record[SPLAT] as unknown[] | undefined;
+  if (!Array.isArray(splat) || splat.length === 0) return info;
+
+  // A message with %s and friends is winston's to interpolate, not ours.
+  if (typeof info.message === "string" && PLACEHOLDER.test(info.message)) {
+    splat.forEach(promote);
+    return info;
+  }
+
+  const kept: unknown[] = [];
+  const appended: string[] = [];
+  for (const value of splat) {
+    if (promote(value)) continue;
+    if (value !== null && typeof value === "object") {
+      kept.push(value);
+      continue;
+    }
+    appended.push(String(value));
+  }
+
+  if (appended.length > 0) {
+    info.message = `${String(info.message)} ${appended.join(" ")}`.trim();
+  }
+  record[SPLAT] = kept;
 
   return info;
 });
@@ -87,7 +124,7 @@ export function createLogger(options: LoggerOptions): Logger {
 
   const base = format.combine(
     format.timestamp(),
-    normaliseErrors(),
+    normaliseArgs(),
     withContext(),
     format.splat()
   );

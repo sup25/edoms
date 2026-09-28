@@ -4,6 +4,11 @@ import { EventType, validatePayload } from "@edoms/shared-events";
 import sequelize from "../config/db";
 import OutboxEvent from "../model/outbox.model";
 import { publish } from "./publisher";
+import {
+  outboxFailed,
+  outboxPending,
+  runWithContext,
+} from "@edoms/shared-observability";
 import logger from "../utils/logger";
 
 export interface OutboxOptions {
@@ -71,6 +76,71 @@ interface ClaimedRow {
 }
 
 /**
+ * Publishes one claimed row and records the outcome; returns whether it went out.
+ *
+ * Split out of drainOutbox so the per-row work can be given its own
+ * observability context without nesting the whole body two levels deeper.
+ */
+async function publishRow(row: ClaimedRow): Promise<boolean> {
+  try {
+    await publish(row.event_type as EventType, row.payload, {
+      correlationId: row.correlation_id,
+      causationId: row.causation_id ?? undefined,
+      eventId: row.event_id,
+      // The relay is the retry mechanism; don't retry inside publish too.
+      maxRetries: 0,
+    });
+
+    await sequelize.query(
+      `UPDATE outbox_events
+          SET status = 'sent', sent_at = NOW(), last_error = NULL
+        WHERE id = :id`,
+      { replacements: { id: row.id }, type: QueryTypes.UPDATE }
+    );
+    return true;
+  } catch (error: unknown) {
+    const attempts = row.attempts + 1;
+    const message = error instanceof Error ? error.message : String(error);
+    // Exponential backoff, capped, so a broker outage does not spin.
+    const backoffSeconds = Math.min(2 ** attempts, 300);
+    const exhausted = attempts >= MAX_ATTEMPTS;
+
+    await sequelize.query(
+      `UPDATE outbox_events
+          SET attempts = :attempts,
+              last_error = :error,
+              status = :status,
+              available_at = NOW() + (:backoff || ' seconds')::interval
+        WHERE id = :id`,
+      {
+        replacements: {
+          id: row.id,
+          attempts,
+          error: message.slice(0, 1000),
+          status: exhausted ? "failed" : "pending",
+          backoff: backoffSeconds,
+        },
+        type: QueryTypes.UPDATE,
+      }
+    );
+
+    if (exhausted) {
+      // Terminal: needs a human, same role as a dead-letter queue.
+      logger.error(
+        `Outbox event ${row.event_id} (${row.event_type}) FAILED permanently ` +
+          `after ${attempts} attempts: ${message}`
+      );
+    } else {
+      logger.warn(
+        `Outbox event ${row.event_id} (${row.event_type}) attempt ${attempts} ` +
+          `failed, retrying in ${backoffSeconds}s: ${message}`
+      );
+    }
+    return false;
+  }
+}
+
+/**
  * Publishes one batch of pending events.
  *
  * Rows are claimed with FOR UPDATE SKIP LOCKED so several replicas can run the
@@ -96,61 +166,22 @@ export async function drainOutbox(): Promise<number> {
   let sent = 0;
 
   for (const row of rows) {
-    try {
-      await publish(row.event_type as EventType, row.payload, {
+    /*
+     * The relay runs on a timer, detached from the request that wrote the row,
+     * so without this the publish and every retry would log with no
+     * correlationId - the one hop in the chain that could not be followed.
+     */
+    const published = await runWithContext(
+      {
         correlationId: row.correlation_id,
         causationId: row.causation_id ?? undefined,
-        eventId: row.event_id,
-        // The relay is the retry mechanism; don't retry inside publish too.
-        maxRetries: 0,
-      });
-
-      await sequelize.query(
-        `UPDATE outbox_events
-            SET status = 'sent', sent_at = NOW(), last_error = NULL
-          WHERE id = :id`,
-        { replacements: { id: row.id }, type: QueryTypes.UPDATE }
-      );
-      sent++;
-    } catch (error: unknown) {
-      const attempts = row.attempts + 1;
-      const message = error instanceof Error ? error.message : String(error);
-      // Exponential backoff, capped, so a broker outage does not spin.
-      const backoffSeconds = Math.min(2 ** attempts, 300);
-      const exhausted = attempts >= MAX_ATTEMPTS;
-
-      await sequelize.query(
-        `UPDATE outbox_events
-            SET attempts = :attempts,
-                last_error = :error,
-                status = :status,
-                available_at = NOW() + (:backoff || ' seconds')::interval
-          WHERE id = :id`,
-        {
-          replacements: {
-            id: row.id,
-            attempts,
-            error: message.slice(0, 1000),
-            status: exhausted ? "failed" : "pending",
-            backoff: backoffSeconds,
-          },
-          type: QueryTypes.UPDATE,
-        }
-      );
-
-      if (exhausted) {
-        // Terminal: needs a human, same role as a dead-letter queue.
-        logger.error(
-          `Outbox event ${row.event_id} (${row.event_type}) FAILED permanently ` +
-            `after ${attempts} attempts: ${message}`
-        );
-      } else {
-        logger.warn(
-          `Outbox event ${row.event_id} (${row.event_type}) attempt ${attempts} ` +
-            `failed, retrying in ${backoffSeconds}s: ${message}`
-        );
-      }
-    }
+        eventType: row.event_type,
+        messageId: row.event_id,
+        component: "outbox-relay",
+      },
+      () => publishRow(row)
+    );
+    if (published) sent++;
   }
 
   if (sent > 0) logger.info(`Outbox relay published ${sent} event(s)`);
@@ -166,6 +197,7 @@ async function tick(): Promise<void> {
     do {
       sent = await drainOutbox();
     } while (running && sent === BATCH_SIZE);
+    await sampleBacklog();
   } catch (error: unknown) {
     logger.error("Outbox relay tick failed", error);
   } finally {
@@ -184,4 +216,25 @@ export function stopOutboxRelay(): void {
   running = false;
   if (timer) clearTimeout(timer);
   timer = null;
+}
+
+/**
+ * Publishes the size of the backlog.
+ *
+ * `pending` growing means the relay is losing ground on the broker. `failed`
+ * is the one that matters: every row is a domain change that committed and
+ * whose event never got out, which is the exact split-brain the outbox exists
+ * to prevent. It is the DB-side equivalent of a non-empty dead-letter queue.
+ */
+export async function sampleBacklog(): Promise<void> {
+  const [row] = await sequelize.query<{ pending: string; failed: string }>(
+    `SELECT COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+            COUNT(*) FILTER (WHERE status = 'failed')  AS failed
+       FROM outbox_events`,
+    { type: QueryTypes.SELECT }
+  );
+  if (!row) return;
+
+  outboxPending.set(Number(row.pending));
+  outboxFailed.set(Number(row.failed));
 }

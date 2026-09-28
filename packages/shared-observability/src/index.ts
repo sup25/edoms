@@ -10,6 +10,13 @@ export {
 export { LoggerOptions, createLogger } from "./logger";
 
 export {
+  ObsHandler,
+  ObsRequest,
+  ObsResponse,
+  ObsNext,
+} from "./express";
+
+export {
   registry,
   initMetrics,
   eventsPublished,

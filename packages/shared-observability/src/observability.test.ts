@@ -140,6 +140,29 @@ describe("logger", () => {
     expect(err.message).toBe("boom");
     expect(err.stack).toContain("boom");
   });
+
+  it("appends a string argument instead of spreading it character by character", () => {
+    // Stock winston does Object.assign(info, "ECONNREFUSED"), which logs
+    // {"0":"E","1":"C",...}. order-service/utils/redis.ts hits this on every
+    // Redis error.
+    const { logger, lines } = captureLogger();
+    logger.error("Redis error:", "connect ECONNREFUSED 127.0.0.1:6379");
+    const line = lines()[0];
+    expect(line.message).toBe("Redis error: connect ECONNREFUSED 127.0.0.1:6379");
+    expect(line["0"]).toBeUndefined();
+  });
+
+  it("still merges an object argument as meta", () => {
+    const { logger, lines } = captureLogger();
+    logger.info("published", { eventId: "e-1", exchange: "order.events" });
+    expect(lines()[0]).toMatchObject({ eventId: "e-1", exchange: "order.events" });
+  });
+
+  it("leaves printf-style interpolation to winston", () => {
+    const { logger, lines } = captureLogger();
+    logger.info("retry %d of %d", 2, 5);
+    expect(lines()[0].message).toBe("retry 2 of 5");
+  });
 });
 
 describe("health", () => {

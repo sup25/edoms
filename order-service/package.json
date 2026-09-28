@@ -31,10 +31,12 @@
   },
   "dependencies": {
     "@edoms/shared-events": "file:../packages/shared-events",
+    "@edoms/shared-observability": "file:../packages/shared-observability",
     "@types/amqplib": "^0.10.7",
     "amqplib": "^0.10.5",
     "axios": "^1.8.2",
     "dotenv": "^16.4.7",
+    "edoms": "file:..",
     "express-async-handler": "^1.2.0",
     "ioredis": "^5.6.0",
     "jsonwebtoken": "^9.0.2",
