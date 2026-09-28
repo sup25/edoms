@@ -178,31 +178,48 @@ argument.
 - [ ] **Graceful shutdown** - drain in-flight messages, close channels and the DB pool on
       `SIGTERM`.
 
-## Phase 8 - Security and hardening
+## Phase 8 - Security and hardening (DONE)
 
-- [ ] **Use the authenticated identity on order creation.** `/createorder` is already
-      behind `requireUser`, but `createOrderController` reads `userId` from `req.body` and
-      ignores `req.user`, so an authenticated user can order as someone else. Take the id
-      from `req.user`.
-- [ ] **Authenticate the order read endpoints.** `GET /order/:id` and
-      `GET /orderStatus/:id` have NO guard at all - no token, and no ownership check
-      inside the controller either - so any order in the system can be read by
-      guessing an integer id. Phase 5 made `/orderStatus/:id` the primary way a client
-      learns its outcome (202 + `statusUrl`), which promoted an open IDOR endpoint to
-      the main read path. Add `requireUser` and filter by owner in the service layer.
-- [ ] **Authenticate `POST /create-payment`.** payment-service mounts it with no guard.
-      Phase 5 kept it for manual retries, but it is open to anyone. The Stripe
-      idempotency key (`payment-<orderId>`) prevents a *double* charge; it does not
-      prevent a stranger triggering the *first* one.
-- [ ] **Service-to-service auth** for the remaining internal REST calls.
-- [ ] **Centralise config.** Validate env vars at boot with Zod and fail fast; no more
-      `new Redis()` with no URL and no error handler.
-- [ ] **Rate limiting and input sanitisation** (the README claims both; neither is wired
-      up everywhere).
-- [ ] **Stripe webhooks** instead of relying on the synchronous confirm result, so a
-      dropped response cannot lose a real charge.
-- [ ] **Rotate the Stripe key** if the working-tree `.env` files were ever shared. They
-      are untracked, which is good, but check history before making the repo public.
+Verified live: `npm run smoke` asserts each of these directly, and the suite is
+5/5. 209 unit tests.
+
+- [x] **Use the authenticated identity on order creation.** The owner comes from
+      `req.user` now, and `userId` is gone from the request schema entirely, so
+      there is nothing left to spoof.
+- [x] **Authenticate the order read endpoints.** Both are guarded, and ownership is
+      enforced in the service layer where the row is read. Someone else's order
+      answers "Order not found" - identical to one that does not exist, because a
+      403 would confirm which ids are real.
+- [x] **Authenticate `POST /create-payment`.** Admin only: since Phase 5 the saga
+      charges by itself, so this exists for operator retries.
+- [x] **Service-to-service auth.** `requireService` accepts a peer's shared token or
+      an admin JWT. This also closed something that was never tracked:
+      inventory-service's reads were entirely open, and `/reservedstocks` returned
+      EVERY order reservation in the system to anyone who could reach the port.
+      Callers use a `serviceClient` that attaches the token, so a new call site
+      cannot forget it.
+- [x] **Centralise config.** Zod-validated env per service, checked at boot, so a
+      misconfigured service never starts. Found `JWT_SECRET` was **6 characters**
+      in every service - the secret protecting every auth decision above. The
+      schema refuses anything under 16.
+- [x] **Rate limiting and input sanitisation.** helmet plus per-IP limits, neither
+      of which existed anywhere despite the README claiming both. Credential
+      endpoints get a tighter budget counting failures only. Probes are exempt: a
+      429 on `/health` reads as the service being unhealthy.
+- [x] **Stripe webhooks.** The outcome of a charge used to come only from the
+      synchronous `paymentIntents.confirm` response, so a lost response meant the
+      money moved and nothing downstream heard - the order sat in `paid` limbo,
+      which the saga deliberately never expires. The webhook is authoritative now
+      and publishes the domain event; the synchronous path still publishes too,
+      and whichever arrives second is a no-op. Idempotent via a
+      `processed_webhooks` ledger, because Stripe retries for up to three days.
+- [ ] **Rotate the Stripe key** if the working-tree `.env` files were ever shared.
+      Still open, and a human decision. `JWT_SECRET` was rotated locally as part
+      of the above.
+
+**Left for later:** mTLS or a mesh identity between services. The shared secret
+prevents an outside caller reaching the port; it does not stop one service
+impersonating another. That belongs with the container work.
 
 ## Phase 9 - Docs
 

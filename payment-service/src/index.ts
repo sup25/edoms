@@ -24,6 +24,8 @@ import {
 import { dependencies } from "./observability";
 import helmet from "helmet";
 import { apiLimiter } from "./middleware/security";
+import { stripeWebhookController } from "./controller/stripeWebhook";
+import ProcessedWebhook from "./model/processedWebhook.model";
 import { startQueueMonitor, stopQueueMonitor } from "./rabbitmq/queueMonitor";
 
 // Registered before anything can record to it.
@@ -37,6 +39,7 @@ const app = express();
     await Payment.sync({ alter: true });
     logger.info("Payment table synced");
     await OutboxEvent.sync({ alter: true });
+    await ProcessedWebhook.sync({ alter: true });
     logger.info("Outbox table synced");
     startOutboxRelay();
     startQueueMonitor();
@@ -57,10 +60,28 @@ const app = express();
  * default CSP is off because these services return JSON, not documents.
  */
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(apiLimiter);
 
 app.use(correlationMiddleware());
 app.use(requestLogger({ logger }));
+
+/*
+ * The Stripe webhook is mounted here, deliberately ahead of two things.
+ *
+ * Ahead of express.json, because the signature is computed over the exact
+ * bytes Stripe sent - parsing and re-stringifying produces a body that will
+ * not verify. It gets express.raw instead.
+ *
+ * Ahead of the rate limiter, because throttling Stripe means dropping the
+ * authoritative record of a charge. It authenticates by signature, so this is
+ * not an open door.
+ */
+app.post(
+  "/webhooks/stripe",
+  express.raw({ type: "application/json", limit: "1mb" }),
+  stripeWebhookController
+);
+
+app.use(apiLimiter);
 app.use(express.json({ limit: "100kb" }));
 
 /* Probes and metrics sit outside /api/v1 - they are for operators, not clients. */
