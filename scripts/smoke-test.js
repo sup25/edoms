@@ -34,6 +34,17 @@ const START_STOCK = 100;
 
 const PRICE = 19.99;
 
+/*
+ * Internal reads are authenticated now (Phase 8).
+ *
+ * inventory-service's stock and reservation endpoints, and order-service's
+ * order reads, used to be open - /reservedstocks returned every reservation
+ * in the system to anyone who asked. They accept a peer service's shared
+ * token or an admin, so the harness presents the token: it is inspecting the
+ * system, not acting as a customer.
+ */
+const SVC = { "x-service-token": serviceEnv("inventory-service").SERVICE_TOKEN || "" };
+
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const DIM = "\x1b[2m";
@@ -295,7 +306,7 @@ async function register(role) {
   console.log(`${BOLD}product ${productId} created${RESET}`);
 
   await sleep(1500);
-  const initial = await api(`${INVENTORY}/stock/${productId}`);
+  const initial = await api(`${INVENTORY}/stock/${productId}`, { headers: SVC });
   assert("new product initializes at 0 stock (defect #16)", initial.body?.data, 0);
 
   await api(`${INVENTORY}/updatestock`, {
@@ -304,7 +315,7 @@ async function register(role) {
     body: JSON.stringify({ id: productId, stock: START_STOCK }),
   });
   await sleep(800);
-  const stocked = await api(`${INVENTORY}/stock/${productId}`);
+  const stocked = await api(`${INVENTORY}/stock/${productId}`, { headers: SVC });
   assert("stock set", stocked.body?.data, START_STOCK);
 
   if (CRASH_MODE) {
@@ -339,7 +350,7 @@ ${BOLD}writing an outbox row directly${RESET} ${DIM}(no publish call)${RESET}`);
     const after = await outboxRowStatus("order-service", eventId);
     assert("relay published it and marked it sent", after?.status, "sent");
 
-    const stock = await api(`${INVENTORY}/stock/${productId}`);
+    const stock = await api(`${INVENTORY}/stock/${productId}`, { headers: SVC });
     assert(
       "the event actually reached inventory (stock reserved)",
       stock.body?.data,
@@ -381,10 +392,10 @@ ${BOLD}injecting order_created for order ${orderId}${RESET} ${DIM}(auto-payment 
     await publishOrderCreated(orderId, productId, QTY);
     await sleep(4000);
 
-    const reserved = await api(`${INVENTORY}/stock/${productId}`);
+    const reserved = await api(`${INVENTORY}/stock/${productId}`, { headers: SVC });
     assert("stock decremented by reservation", reserved.body?.data, START_STOCK - QTY);
 
-    const inFlight = await api(`${ORDER}/orderStatus/${orderId}`);
+    const inFlight = await api(`${ORDER}/orderStatus/${orderId}`, { headers: SVC });
     assert(
       "order is reserved and still unpaid",
       ["pending", "reserved"].includes(inFlight.body?.data),
@@ -399,19 +410,19 @@ ${BOLD}publishing payment_failure TWICE with messageId=${messageId}${RESET}`);
 
       await publishPaymentFailure(orderId, messageId);
       await sleep(3000);
-      const afterFirst = await api(`${INVENTORY}/stock/${productId}`);
+      const afterFirst = await api(`${INVENTORY}/stock/${productId}`, { headers: SVC });
       assert("first delivery restores stock", afterFirst.body?.data, START_STOCK);
 
       await publishPaymentFailure(orderId, messageId);
       await sleep(3000);
-      const afterSecond = await api(`${INVENTORY}/stock/${productId}`);
+      const afterSecond = await api(`${INVENTORY}/stock/${productId}`, { headers: SVC });
       assert(
         "duplicate delivery does NOT inflate stock (defect #7/#8)",
         afterSecond.body?.data,
         START_STOCK
       );
 
-      const status = await api(`${ORDER}/orderStatus/${orderId}`);
+      const status = await api(`${ORDER}/orderStatus/${orderId}`, { headers: SVC });
       assert("order failed exactly once", status.body?.data, "failed");
     } else {
       console.log(`
@@ -422,13 +433,13 @@ ${BOLD}publishing payment_failure${RESET}`);
       await publishPaymentFailure(orderId);
       await sleep(3000);
 
-      const rolledBack = await api(`${INVENTORY}/stock/${productId}`);
+      const rolledBack = await api(`${INVENTORY}/stock/${productId}`, { headers: SVC });
       assert("stock rolled back to original", rolledBack.body?.data, START_STOCK);
 
-      const failed = await api(`${ORDER}/orderStatus/${orderId}`);
+      const failed = await api(`${ORDER}/orderStatus/${orderId}`, { headers: SVC });
       assert("order marked FAILED (the Phase 1 typo fix)", failed.body?.data, "failed");
 
-      const res = await api(`${INVENTORY}/reservedstock/${orderId}`);
+      const res = await api(`${INVENTORY}/reservedstock/${orderId}`, { headers: SVC });
       assert("reservation canceled", res.body?.data?.[0]?.status, "canceled");
     }
 
@@ -450,7 +461,8 @@ ${RED}${BOLD}${failures} check(s) failed.${RESET}  productId=${productId} orderI
   const order = await api(`${ORDER}/createorder`, {
     method: "POST",
     headers: user.headers,
-    body: JSON.stringify({ userId: user.id, items: [{ productId, quantity: orderQty }] }),
+    // No userId: the owner comes from the token now (defect #13).
+    body: JSON.stringify({ items: [{ productId, quantity: orderQty }] }),
   });
   const orderId = order.body?.data?.id;
   if (!orderId) throw new Error(`create order failed: ${JSON.stringify(order.body)}`);
@@ -479,7 +491,7 @@ ${BOLD}injecting order_created for ${huge} units${RESET} ` +
     await publishOrderCreated(pendingOrderId, productId, huge);
     await sleep(4000);
 
-    const stock = await api(`${INVENTORY}/stock/${productId}`);
+    const stock = await api(`${INVENTORY}/stock/${productId}`, { headers: SVC });
     assert(
       "handler refused - stock unchanged, nothing reserved (defect #5)",
       stock.body?.data,
@@ -487,7 +499,7 @@ ${BOLD}injecting order_created for ${huge} units${RESET} ` +
     );
     assert("stock never went negative", stock.body?.data >= 0, true);
 
-    const status = await api(`${ORDER}/orderStatus/${pendingOrderId}`);
+    const status = await api(`${ORDER}/orderStatus/${pendingOrderId}`, { headers: SVC });
     assert("order FAILED via reservation.failed (defect #6)", status.body?.data, "failed");
 
     console.log(
@@ -502,12 +514,12 @@ ${RED}${BOLD}${failures} check(s) failed.${RESET}  productId=${productId}
     process.exit(failures === 0 ? 0 : 1);
   }
 
-  const reserved = await api(`${INVENTORY}/stock/${productId}`);
+  const reserved = await api(`${INVENTORY}/stock/${productId}`, { headers: SVC });
   assert("stock decremented by reservation", reserved.body?.data, START_STOCK - QTY);
 
   // The order is 'reserved' now, not 'pending' - Phase 5 added the
   // intermediate saga states.
-  const afterReserve = await api(`${ORDER}/orderStatus/${orderId}`);
+  const afterReserve = await api(`${ORDER}/orderStatus/${orderId}`, { headers: SVC });
   assert(
     "order is in flight (pending or reserved)",
     ["pending", "reserved"].includes(afterReserve.body?.data),
@@ -527,7 +539,7 @@ ${BOLD}waiting for the saga to complete by itself${RESET}`);
   let status = "";
   const deadline = Date.now() + 40_000;
   while (Date.now() < deadline) {
-    const r = await api(`${ORDER}/orderStatus/${orderId}`);
+    const r = await api(`${ORDER}/orderStatus/${orderId}`, { headers: SVC });
     status = r.body?.data;
     if (status === "confirmed" || status === "failed" || status === "cancelled") break;
     await sleep(1000);
@@ -535,11 +547,47 @@ ${BOLD}waiting for the saga to complete by itself${RESET}`);
 
   assert("order reached CONFIRMED with no client involvement", status, "confirmed");
 
-  const res = await api(`${INVENTORY}/reservedstock/${orderId}`);
+  const res = await api(`${INVENTORY}/reservedstock/${orderId}`, { headers: SVC });
   assert("reservation confirmed", res.body?.data?.[0]?.status, "confirmed");
 
-  const finalStock = await api(`${INVENTORY}/stock/${productId}`);
+  const finalStock = await api(`${INVENTORY}/stock/${productId}`, { headers: SVC });
   assert("stock stays decremented", finalStock.body?.data, START_STOCK - QTY);
+
+  /*
+   * Phase 8. All of these were wide open: no token and no ownership check, so
+   * any order was readable by guessing an integer - and Phase 5 had made
+   * /orderStatus/:id the way a client learns its own outcome.
+   */
+  console.log(`
+${BOLD}checking the order is private${RESET}`);
+
+  const anonymous = await api(`${ORDER}/orderStatus/${orderId}`);
+  assert("an unauthenticated read is rejected", anonymous.status, 401);
+
+  const owner = await api(`${ORDER}/orderStatus/${orderId}`, { headers: user.headers });
+  assert("the owner can read their own order", owner.body?.data, "confirmed");
+
+  const intruder = await register("user");
+  const stolen = await api(`${ORDER}/orderStatus/${orderId}`, {
+    headers: intruder.headers,
+  });
+  assert("another customer cannot read it (defect #18)", stolen.status, 404);
+
+  const details = await api(`${ORDER}/order/${orderId}`, { headers: intruder.headers });
+  assert("nor its contents", details.status, 404);
+
+  const reservations = await api(`${INVENTORY}/reservedstocks`);
+  assert(
+    "inventory no longer hands out every reservation",
+    reservations.status,
+    401
+  );
+
+  const freeCharge = await api(`${PAYMENT}/create-payment`, {
+    method: "POST",
+    body: JSON.stringify({ orderId: String(orderId), items: [] }),
+  });
+  assert("an unauthenticated charge is rejected (defect #19)", freeCharge.status, 401);
 
 
   console.log(

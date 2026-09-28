@@ -1,5 +1,8 @@
 // Tracing first: it patches modules as they are required.
 import "./tracing";
+// Then config: a misconfigured service should fail here, not three
+// layers down when something reads an env var that was never set.
+import "./config/env";
 import sequelize from "./config/db";
 import express from "express";
 import Order from "./model/order.model";
@@ -25,6 +28,8 @@ import {
   stopTracing,
 } from "@edoms/shared-observability";
 import { dependencies } from "./observability";
+import helmet from "helmet";
+import { apiLimiter } from "./middleware/security";
 import { startQueueMonitor, stopQueueMonitor } from "./rabbitmq/queueMonitor";
 
 // Registered before anything can record to it.
@@ -60,9 +65,17 @@ startOrderSagaEventService();
  * Correlation first: anything mounted above it logs without a correlationId,
  * and an inbound x-correlation-id has to be honoured before a handler runs.
  */
+/*
+ * Security headers before anything else answers. helmet removes the
+ * `X-Powered-By: Express` giveaway and sets the usual hardening headers; the
+ * default CSP is off because these services return JSON, not documents.
+ */
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(apiLimiter);
+
 app.use(correlationMiddleware());
 app.use(requestLogger({ logger }));
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
 
 /* Probes and metrics sit outside /api/v1 - they are for operators, not clients. */
 app.get("/health", healthHandler("order-service"));

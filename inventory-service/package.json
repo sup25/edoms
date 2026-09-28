@@ -31,6 +31,8 @@
     "edoms": "file:..",
     "express": "^4.21.2",
     "express-async-handler": "^1.2.0",
+    "express-rate-limit": "^8.7.0",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
     "nodemon": "^3.1.9",
     "pg": "^8.13.3",

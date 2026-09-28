@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import axios from "axios";
+import { serviceClient } from "../utils/serviceClient";
 import { processPaymentAndStoreDetailsService } from "../service";
 import expressAsyncHandler from "express-async-handler";
 import { STATUS_CODES } from "../constants";
@@ -18,7 +18,7 @@ export const processPaymentAndStoreDetailsController = expressAsyncHandler(
     const amount = calculateTotalAmount(items);
 
     try {
-      const orderResponse = await axios.get(`${orderUrl}/${orderIdStr}`);
+      const orderResponse = await serviceClient.get(`${orderUrl}/${orderIdStr}`);
 
       if (!orderResponse.data.success) {
         res.status(STATUS_CODES.BAD_REQUEST).json({
@@ -38,7 +38,7 @@ export const processPaymentAndStoreDetailsController = expressAsyncHandler(
       // Check reserved stock
       let reservedStockResponse;
       try {
-        reservedStockResponse = await axios.get(
+        reservedStockResponse = await serviceClient.get(
           `${reservedStockUrl}/${orderIdStr}`
         );
       } catch (error: any) {

@@ -14,7 +14,7 @@ import connectdb from "../config/db";
 import { publishToOutbox } from "../rabbitmq/outbox";
 import { cacheWrite } from "../utils/cache";
 import redis from "../utils/redis";
-import axios from "axios";
+import { serviceClient } from "../utils/serviceClient";
 import { INVENTORY_SERVICE_URL } from "../config/apiEndpoints";
 import logger from "../utils/logger";
 
@@ -99,7 +99,7 @@ export const getAllProductsController = expressAsyncHandler(
       let stockMap: Record<string, number> = {};
       if (hasMissingStock) {
         try {
-          const stockResponse = await axios.get(
+          const stockResponse = await serviceClient.get(
             `${INVENTORY_SERVICE_URL}/stocks`
           );
           if (stockResponse.status !== STATUS_CODES.OK) {

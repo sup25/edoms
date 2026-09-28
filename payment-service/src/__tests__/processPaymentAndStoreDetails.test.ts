@@ -1,6 +1,6 @@
 process.env.STRIPE_SECRET_KEY = "test_stripe_key";
 import { Request, Response } from "express";
-import axios from "axios";
+import { serviceClient } from "../utils/serviceClient";
 import { processPaymentAndStoreDetailsController } from "../controller";
 import { processPaymentAndStoreDetailsService } from "../service";
 import { EventType } from "@edoms/shared-events";
@@ -10,7 +10,12 @@ import { calculateTotalAmount } from "../utils/calculateTotalAmount";
 import { STATUS_CODES } from "../constants";
 
 // Mock dependencies
-jest.mock("axios");
+// The peer-service client, not axios itself: internal calls carry the shared
+// service token now, and mocking axios wholesale would leave serviceClient
+// undefined because axios.create() would return a mock with nothing on it.
+jest.mock("../utils/serviceClient", () => ({
+  serviceClient: { get: jest.fn() },
+}));
 jest.mock("../service");
 jest.mock("../rabbitmq/publisher");
 jest.mock("../model/outbox.model", () => ({
@@ -23,7 +28,7 @@ jest.mock("../rabbitmq/outbox", () => ({
 
 jest.mock("../utils/calculateTotalAmount");
 
-const mockedAxios = axios as jest.Mocked<typeof axios>;
+const mockedAxios = serviceClient as unknown as { get: jest.Mock };
 const mockedService = processPaymentAndStoreDetailsService as jest.Mock;
 const mockedPublishEvent = publishToOutbox as jest.Mock;
 const mockedCalculateTotalAmount = calculateTotalAmount as jest.Mock;
