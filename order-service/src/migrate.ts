@@ -1,4 +1,4 @@
-import { migrator } from "./config/migrator";
+import { getMigrator } from "./config/migrator";
 
 /**
  * CLI entry point: `npm run migrate`, `npm run migrate:down`, `npm run migrate:status`.
@@ -7,4 +7,4 @@ import { migrator } from "./config/migrator";
  * replicas racing to migrate is not something to leave to chance. In
  * production set MIGRATE_ON_BOOT=false and run this as a deploy step.
  */
-migrator.runAsCLI();
+getMigrator().runAsCLI();

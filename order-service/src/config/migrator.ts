@@ -6,33 +6,52 @@ import logger from "../utils/logger";
 /**
  * Schema migrations.
  *
- * Replaces `sync({ alter: true })`, which did not just "silently mutate the
- * schema at runtime" - it actively damaged it. Sequelize cannot recognise a
- * unique index it created on a previous boot, so every start added another
- * one. This repo's product table had accumulated 383 unique indexes on
- * `slug`, and the outbox tables 18 to 38 apiece on `event_id`, all identical.
- * Every `npm run dev` added more, and each one slows every insert.
+ * Replaces `sync({ alter: true })`, which did not merely mutate the schema at
+ * runtime - it damaged it. Sequelize cannot recognise a unique constraint it
+ * created on a previous boot, so every start added another one. This repo had
+ * accumulated 386 identical unique constraints on `Products.slug` and 18 to 38
+ * on each service's `outbox_events.event_id`: 506 indexes across five
+ * databases where about fifteen were wanted, and each one is maintained on
+ * every insert.
  *
  * Migrations run in order, once, and are recorded in `migrations_meta`.
  */
-export const migrator = new Umzug({
-  migrations: {
-    // Forward slashes and an absolute path: the glob library does not treat
-    // Windows backslashes as separators, so a relative pattern silently
-    // matched nothing and every service reported "applied 0 migrations".
-    glob: path.join(__dirname, "..", "migrations", "*.{ts,js}").split(path.sep).join("/"),
-  },
-  context: sequelize,
-  storage: new SequelizeStorage({ sequelize, tableName: "migrations_meta" }),
-  logger: {
-    info: (message) => logger.info(`migration: ${JSON.stringify(message)}`),
-    warn: (message) => logger.warn(`migration: ${JSON.stringify(message)}`),
-    error: (message) => logger.error(`migration: ${JSON.stringify(message)}`),
-    debug: () => undefined,
-  },
-});
 
-export type Migration = typeof migrator._types.migration;
+function buildMigrator() {
+  return new Umzug({
+    migrations: {
+      // Forward slashes and an absolute path: the glob library does not treat
+      // Windows backslashes as separators, so a relative pattern silently
+      // matched nothing and every service reported "applied 0 migrations".
+      glob: path.join(__dirname, "..", "migrations", "*.{ts,js}").split(path.sep).join("/"),
+    },
+    context: sequelize,
+    storage: new SequelizeStorage({ sequelize, tableName: "migrations_meta" }),
+    logger: {
+      info: (message) => logger.info(`migration: ${JSON.stringify(message)}`),
+      warn: (message) => logger.warn(`migration: ${JSON.stringify(message)}`),
+      error: (message) => logger.error(`migration: ${JSON.stringify(message)}`),
+      debug: () => undefined,
+    },
+  });
+}
+
+/*
+ * Built on demand rather than at import.
+ *
+ * SequelizeStorage reaches into the Sequelize instance as it is constructed,
+ * so building this at module scope made merely IMPORTING the app fail in any
+ * test that mocks the database - which is every controller test. Nothing here
+ * should do work just because it was required.
+ */
+let instance: ReturnType<typeof buildMigrator> | undefined;
+
+export function getMigrator(): ReturnType<typeof buildMigrator> {
+  if (!instance) instance = buildMigrator();
+  return instance;
+}
+
+export type Migration = ReturnType<typeof buildMigrator>["_types"]["migration"];
 
 /**
  * Brings the schema up to date.
@@ -48,7 +67,7 @@ export async function runMigrations(): Promise<void> {
     return;
   }
 
-  const applied = await migrator.up();
+  const applied = await getMigrator().up();
   if (applied.length === 0) {
     logger.info("Schema up to date");
     return;
