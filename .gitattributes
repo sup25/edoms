@@ -1,0 +1,9 @@
+# Files that run inside a Linux container must keep LF endings.
+#
+# This checkout has core.autocrlf on, so without these a shell script arrives
+# with CRLF and the container fails with a "bad interpreter" error that names
+# no obvious cause - the script looks perfectly fine in an editor.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
