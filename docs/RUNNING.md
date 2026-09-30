@@ -230,7 +230,7 @@ Endpoint reference:
 | Service | Method | Path |
 |---|---|---|
 | auth | POST | `/api/v1/admins`, `/api/v1/users`, `/api/v1/auth/login`, `/api/v1/auth/refresh` |
-| product | POST/GET/PUT/DELETE | `/api/v1/createproduct`, `/products`, `/product/:id`, `/updateproduct/:id`, `/deleteproduct/:id` |
+| product | POST/GET/PUT/DELETE | `/api/v1/createproduct`, `/products`, `/product/:id`, `/product/slug/:slug`, `/updateproduct/:id`, `/deleteproduct/:id` |
 | inventory | GET/POST | `/api/v1/stock/:id`, `/stocks`, `/reservedstocks`, `/reservedstock/:id`, `/updatestock` |
 | order | POST/GET | `/api/v1/createorder`, `/order/:id`, `/orderStatus/:id` |
 | payment | POST | `/api/v1/create-payment` |
