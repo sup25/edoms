@@ -1,11 +1,16 @@
 import Product from "../model/product.model";
 import { TCreateProductRequest, TUpdateProductRequest } from "../types";
 
+/*
+ * Takes everything from the create request except `stock`: that belongs to
+ * inventory-service and travels on the `product created` event, not through
+ * this table. Spelled out in the type so it cannot be passed here by mistake.
+ */
 export const createProductService = async ({
   name,
   price,
   slug,
-}: TCreateProductRequest) => {
+}: Omit<TCreateProductRequest, "stock">) => {
   const existingProduct = await Product.findOne({ where: { slug } });
   if (existingProduct) {
     throw new Error("Slug already exists. Please use a different slug.");

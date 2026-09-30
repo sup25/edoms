@@ -29,8 +29,9 @@ export const productCreatedSchema = z.object({
   name: z.string().min(1),
   price: z.union([z.number(), z.string()]),
   slug: z.string().min(1),
-  // Optional today: product-service has no stock field on create, so inventory
-  // initializes at 0. See defect #16.
+  // product-service always sends this now (defect #16). Still optional so the
+  // relay can drain outbox rows written before that change without failing
+  // validation; new events always carry a number.
   stock: z.number().int().nonnegative().optional(),
 });
 

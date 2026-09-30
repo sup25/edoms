@@ -189,7 +189,7 @@
               "raw": "{\n  \"name\": \"Test Widget\",\n  \"price\": 19.99,\n  \"slug\": \"{{productSlug}}\"\n}"
             },
             "url": { "raw": "{{productUrl}}/createproduct", "host": ["{{productUrl}}"], "path": ["createproduct"] },
-            "description": "Schema is exactly {name, price, slug}:\n- price must be a NUMBER (19.99), not a string (\"19.99\")\n- slug must be at least 6 characters and unique\n- there is NO description or stock field\n\nFIRES: `product created` on exchange product_service.\nCONSUMED BY: inventory-service, which creates the stock row.\n\nBecause the event has no stock field, inventory initializes it at 0. That is why the next folder has to set stock explicitly."
+            "description": "Schema is {name, price, slug, stock?}:\n- price must be a NUMBER (19.99), not a string (\"19.99\")\n- slug must be at least 6 characters and unique\n- stock is optional, defaults to 0, and must be a non-negative integer; there is NO description field\n\nFIRES: `product created` on exchange product_service.\nCONSUMED BY: inventory-service, which creates the stock row.\n\nSend stock here and inventory opens the row at that number, so the product is orderable straight away. Omit it and the row opens at 0, which is why the next folder sets stock explicitly."
           }
         },
         {

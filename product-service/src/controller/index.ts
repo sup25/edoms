@@ -25,16 +25,23 @@ interface StockData {
 
 export const createProductController = expressAsyncHandler(
   async (req: Request, res: Response): Promise<void> => {
-    const { name, price, slug } = req.body;
+    const { name, price, slug, stock } = req.body;
     try {
       const createProduct = await createProductService({
         name,
         price,
         slug,
       });
+      /*
+       * Stock rides on the event, not on the product row: inventory-service
+       * owns the stock table and this event is the only thing that tells it a
+       * product exists. It used to publish the Sequelize instance as-is, which
+       * has no stock field, so inventory read `undefined` and initialized at 0.
+       */
+      const createdProduct = { ...createProduct.toJSON(), stock };
       try {
         await connectdb.transaction(async (transaction) =>
-          publishToOutbox(EventType.PRODUCT_CREATED, createProduct, transaction)
+          publishToOutbox(EventType.PRODUCT_CREATED, createdProduct, transaction)
         );
       } catch (eventError) {
         logger.error(`❌ Failed to publish ProductCreated event:`, eventError);
@@ -43,7 +50,7 @@ export const createProductController = expressAsyncHandler(
       res.status(STATUS_CODES.CREATED).json({
         success: true,
         message: "Product created successfully",
-        data: createProduct,
+        data: createdProduct,
       });
     } catch (error: unknown) {
       logger.error(error);

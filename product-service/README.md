@@ -79,9 +79,16 @@ npm start
     {
       "name": "Product Name",
       "price": 99.99,
-      "slug": "product-name"
+      "slug": "product-name",
+      "stock": 25
     }
     ```
+
+  - `stock` is optional and defaults to `0`. It is not stored on the product -
+    inventory-service owns stock - it travels on the `product created` event so
+    inventory can open the stock row at the right number. Omit it and the
+    product is created with no stock, which means it cannot be ordered until an
+    admin calls `POST /api/v1/updatestock`.
 
 - `PUT /api/v1/updateproduct/:id` - Update a product
 
