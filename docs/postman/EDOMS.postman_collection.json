@@ -228,7 +228,7 @@
                 "exec": [
                   "const stock = pm.response.json()?.data;",
                   "pm.test('new product starts at 0 stock', () => stock === 0);",
-                  "console.log('stock =', stock, '<- defect #16: product_created carries no stock field');"
+                  "console.log('stock =', stock, '<- 0 because this request omitted stock; send stock on createproduct to open the row higher');"
                 ]
               }
             }
