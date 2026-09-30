@@ -43,16 +43,27 @@ router.delete(
   deleteProductController
 );
 
+/*
+ * The slug lookup lives under its own path segment, not `/product/:slug`.
+ * Both routes are one segment wide, so Express matched whichever registered
+ * first - `/product/:id` - and every slug request died in `getProductByIdSchema`
+ * as a 400 "Validation error". The controller below was unreachable.
+ *
+ * Dispatching one `/product/:idOrSlug` on "is it all digits" was the other
+ * option, but slugs only have to be 6 characters, so "123456" is a legal slug
+ * that would route to the id lookup forever. A distinct path has no such
+ * ambiguity.
+ */
+router.get(
+  "/product/slug/:slug",
+  validate(undefined, GetProductBySlugParamsSchema),
+  getProductBySlugController
+);
+
 router.get(
   "/product/:id",
   validate(undefined, getProductByIdSchema),
   getProductByIdController
-);
-
-router.get(
-  "/product/:slug",
-  validate(undefined, GetProductBySlugParamsSchema),
-  getProductBySlugController
 );
 
 export default router;

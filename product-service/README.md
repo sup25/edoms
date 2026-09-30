@@ -70,7 +70,7 @@ npm start
 
 - `GET /api/v1/product/:id` - Get product by ID
 
-- `GET /api/v1/product/:slug` - Get product by slug
+- `GET /api/v1/product/slug/:slug` - Get product by slug
 
 - `POST /api/v1/createproduct` - Create a new product
 

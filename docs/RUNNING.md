@@ -296,7 +296,7 @@ Endpoint reference:
 | Service | Path | Who can call it |
 |---|---|---|
 | auth | `POST /api/v1/admins`, `/users`, `/auth/login`, `/auth/refresh` | anyone (rate limited) |
-| product | `GET /api/v1/products`, `/product/:id` | anyone - it is a catalogue |
+| product | `GET /api/v1/products`, `/product/:id`, `/product/slug/:slug` | anyone - it is a catalogue |
 | product | `POST /createproduct`, `PUT /updateproduct/:id`, `DELETE /deleteproduct/:id` | admin |
 | inventory | `GET /api/v1/stock/:id`, `/stocks`, `/reservedstocks`, `/reservedstock/:id` | peer service (`x-service-token`) or admin |
 | inventory | `POST /updatestock` | admin |
