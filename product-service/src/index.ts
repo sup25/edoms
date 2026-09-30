@@ -1,5 +1,8 @@
 // Tracing first: it patches modules as they are required.
 import "./tracing";
+// Then config: a misconfigured service should fail here, not three
+// layers down when something reads an env var that was never set.
+import "./config/env";
 import connectdb from "./config/db";
 import express from "express";
 import Product from "./model/product.model";
@@ -25,6 +28,9 @@ import {
   stopTracing,
 } from "@edoms/shared-observability";
 import { dependencies } from "./observability";
+import { runMigrations } from "./config/migrator";
+import helmet from "helmet";
+import { apiLimiter } from "./middleware/security";
 import { startQueueMonitor, stopQueueMonitor } from "./rabbitmq/queueMonitor";
 
 // Registered before anything can record to it.
@@ -35,10 +41,13 @@ const app = express();
   try {
     await connectdb.authenticate();
     logger.info("Connection successful");
-    await Product.sync({ alter: true });
-    logger.info("Product table synced");
-    await OutboxEvent.sync({ alter: true });
-    logger.info("Outbox table synced");
+
+    /*
+     * Migrations, not sync({ alter: true }). The old call re-added a
+     * unique index on every boot because Sequelize could not recognise
+     * the one it made last time - see migrations/0002.
+     */
+    await runMigrations();
     startOutboxRelay();
     startQueueMonitor();
   } catch (error) {
@@ -82,9 +91,17 @@ startStockRollBackEventService();
  * Correlation first: anything mounted above it logs without a correlationId,
  * and an inbound x-correlation-id has to be honoured before a handler runs.
  */
+/*
+ * Security headers before anything else answers. helmet removes the
+ * `X-Powered-By: Express` giveaway and sets the usual hardening headers; the
+ * default CSP is off because these services return JSON, not documents.
+ */
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(apiLimiter);
+
 app.use(correlationMiddleware());
 app.use(requestLogger({ logger }));
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
 
 /* Probes and metrics sit outside /api/v1 - they are for operators, not clients. */
 app.get("/health", healthHandler("product-service"));

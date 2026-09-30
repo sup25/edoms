@@ -1,0 +1,19 @@
+# Never ship secrets or a host's node_modules into an image.
+**/.env
+**/.env.*
+!**/.env.example
+
+**/node_modules
+**/dist
+**/logs
+**/coverage
+
+.git
+.github
+docs
+scripts
+**/__tests__
+**/*.test.ts
+
+AI_CONTEXT.md
+README.md

@@ -1,10 +1,12 @@
 import expressAsyncHandler from "express-async-handler";
 import { Request, Response } from "express";
+import type { AuthenticatedRequest } from "../types";
 import { STATUS_CODES } from "../constants";
 import {
   createOrderService,
   getOrderDetailsByIdService,
   getOrderStatusByIdService,
+  Viewer,
 } from "../service";
 import { randomUUID } from "crypto";
 import { EventType } from "@edoms/shared-events";
@@ -13,20 +15,44 @@ import { publishToOutbox } from "../rabbitmq/outbox";
 import logger from "../utils/logger";
 import ProductProjection from "../model/productProjection.model";
 
+/**
+ * Who is asking, from the verified token.
+ *
+ * The route guards run first, so `req.user` is always populated here; the
+ * fallback exists so a missing guard fails closed (userId 0 owns nothing)
+ * rather than silently granting access to everything.
+ */
+function viewerFrom(req: AuthenticatedRequest): Viewer {
+  const role = req.user?.role;
+  return {
+    userId: Number(req.user?.id) || 0,
+    isPrivileged: role === "admin" || role === "service",
+  };
+}
+
 interface OrderItem {
   productId: number;
   quantity: number;
 }
 
 export const createOrderController = expressAsyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const { userId, items } = req.body;
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const { items } = req.body;
 
-    // Validate userId
-    if (!userId || userId <= 0) {
-      res.status(STATUS_CODES.BAD_REQUEST).json({
+    /*
+     * The owner comes from the VERIFIED TOKEN, never from the body.
+     *
+     * `requireUser` has always guarded this route, but the controller read
+     * `userId` out of `req.body` and never looked at `req.user` - so any
+     * authenticated customer could place an order billed to someone else by
+     * changing one number. The body no longer carries a userId at all, so
+     * there is nothing left to spoof.
+     */
+    const userId = Number(req.user?.id);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      res.status(STATUS_CODES.UNAUTHORIZED).json({
         success: false,
-        message: "Invalid user ID",
+        message: "Authenticated user required",
         data: null,
       });
       return;
@@ -155,11 +181,11 @@ export const createOrderController = expressAsyncHandler(
 );
 
 export const getOrderDetailsByIdController = expressAsyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const id = Number(req.params.id);
 
     try {
-      const result = await getOrderDetailsByIdService(id);
+      const result = await getOrderDetailsByIdService(id, viewerFrom(req));
       res.status(STATUS_CODES.OK).json({
         success: true,
         message: "Order fetched successfully",
@@ -186,10 +212,10 @@ export const getOrderDetailsByIdController = expressAsyncHandler(
 );
 
 export const getOrderStatusByIdController = expressAsyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const id = Number(req.params.id);
     try {
-      const result = await getOrderStatusByIdService(id);
+      const result = await getOrderStatusByIdService(id, viewerFrom(req));
       res.status(STATUS_CODES.OK).json({
         success: true,
         message: "Order status fetched successfully",

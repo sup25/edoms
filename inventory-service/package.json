@@ -7,7 +7,10 @@
     "test": "jest",
     "dev": "nodemon --exec ts-node-dev --respawn src/index.ts",
     "start": "node dist/index.js",
-    "build": "tsc"
+    "build": "tsc",
+    "migrate": "ts-node src/migrate.ts up",
+    "migrate:down": "ts-node src/migrate.ts down",
+    "migrate:status": "ts-node src/migrate.ts pending"
   },
   "keywords": [],
   "author": "",
@@ -31,11 +34,14 @@
     "edoms": "file:..",
     "express": "^4.21.2",
     "express-async-handler": "^1.2.0",
+    "express-rate-limit": "^8.7.0",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
     "nodemon": "^3.1.9",
     "pg": "^8.13.3",
     "sequelize": "^6.37.6",
     "ts-node-dev": "^2.0.0",
+    "umzug": "^3.8.3",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0",
     "zod": "^3.24.2"

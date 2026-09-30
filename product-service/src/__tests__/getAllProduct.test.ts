@@ -3,7 +3,9 @@ jest.mock("../service");
 // Mock the redis module from "../utils/redis"
 jest.mock("../utils/redis");
 // Mock Axios for inventory service calls
-jest.mock("axios");
+jest.mock("../utils/serviceClient", () => ({
+  serviceClient: { get: jest.fn() },
+}));
 // Mock api for inventory service calls
 jest.mock("../config/apiEndpoints", () => ({
   INVENTORY_SERVICE_URL: "http://mock-inventory-service",
@@ -14,13 +16,13 @@ import express from "express";
 import { getAllProductsController } from "../controller";
 import Product from "../model/product.model";
 import * as service from "../service";
-import axios from "axios";
+import { serviceClient } from "../utils/serviceClient";
 import redis from "../utils/redis";
 
 // Type the mocked modules
 const mockedService = service as jest.Mocked<typeof service>;
 const mockedRedis = redis as jest.Mocked<typeof redis>;
-const mockedAxios = axios as jest.Mocked<typeof axios>;
+const mockedAxios = serviceClient as unknown as { get: jest.Mock };
 
 describe("GET /api/v1/products", () => {
   let app: express.Express;

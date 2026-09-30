@@ -6,6 +6,38 @@ HTTP responses. This guide gets it running and then makes the events visible.
 
 ---
 
+## 0. The short way: Docker
+
+```bash
+cp .env.example .env     # fill in JWT_SECRET, SERVICE_TOKEN, STRIPE_SECRET_KEY
+docker compose up --build
+```
+
+That brings up Postgres with the five databases, RabbitMQ with its management
+UI, Redis, and all five services. Migrations run on start, so there is no
+separate setup step.
+
+Compose refuses to start without `JWT_SECRET` and `SERVICE_TOKEN`. That is on
+purpose: a placeholder secret would reject every token at runtime, which is far
+harder to diagnose than a refusal up front. Generate them with
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Often what you actually want while developing is the infrastructure in
+containers and the services on the host, so you keep hot reload:
+
+```bash
+docker compose up postgres rabbitmq redis
+npm run dev
+```
+
+The rest of this document covers that second way, running everything on the
+host. It is still the better setup for changing code.
+
+---
+
 ## 1. Check what you are missing
 
 ```bash
@@ -82,6 +114,28 @@ auth-service are rejected everywhere else.
 services find RabbitMQ without it being configured anywhere.
 
 ---
+
+
+### Migrations
+
+Schema changes are versioned migrations now, not `sync({ alter: true })`. They
+run on boot by default, so `npm run dev` needs nothing extra. To run them
+explicitly:
+
+```bash
+npm --prefix order-service run migrate
+npm --prefix order-service run migrate:status
+```
+
+Set `MIGRATE_ON_BOOT=false` where several replicas would otherwise race to
+migrate, and run them as a deploy step instead.
+
+> The old `sync({ alter: true })` did not just mutate the schema quietly - it
+> added a fresh duplicate unique constraint on every single boot, because
+> Sequelize cannot recognise the one it made last time. These databases had
+> accumulated 506 indexes where about fifteen were wanted. Migration `0002`
+> cleans that up; if you are restoring an old dump, run the migrations and it
+> will sort itself out.
 
 ## 4. Start the services
 
@@ -204,16 +258,28 @@ curl -X POST http://localhost:5002/api/v1/updatestock   -H "Content-Type: applic
 ```
 
 ```bash
-# 4. Create an order. userId and productId are numbers.
-#    Tracer: order_created -> inventory reserves stock -> stock_decrement.
-curl -X POST http://localhost:5003/api/v1/createorder   -H "Content-Type: application/json"   -d '{"userId":1,"items":[{"productId":1,"quantity":2}]}'
+# 3b. Register a customer and log in - ordering needs a USER token, not the
+#     admin one. An admin token gets 403 on /createorder.
+curl -X POST http://localhost:5000/api/v1/users   -H "Content-Type: application/json"   -d '{"email":"buyer@example.com","password":"Password123!"}'
+
+curl -X POST http://localhost:5000/api/v1/auth/login   -H "Content-Type: application/json"   -d '{"email":"buyer@example.com","password":"Password123!"}'
+# -> copy the accessToken as <USER_TOKEN>
+```
+
+```bash
+# 4. Create an order. NO userId in the body - since Phase 8 the owner comes
+#    from the token, and sending one has no effect.
+#    Tracer: order.created -> inventory reserves stock.
+curl -X POST http://localhost:5003/api/v1/createorder   -H "Content-Type: application/json"   -H "Authorization: Bearer <USER_TOKEN>"   -d '{"items":[{"productId":1,"quantity":2}]}'
 ```
 
 ```bash
 # 5. Nothing to do. Watch the trace: payment charges automatically the moment
 #    inventory publishes inventory.order.reserved, then the order settles.
-#    Poll until it stops changing:
-curl http://localhost:5003/api/v1/orderStatus/1
+#    Poll until it stops changing. The read is authenticated now, and you see
+#    only your own orders - another customer's token gets 404, the same answer
+#    as an order that does not exist.
+curl http://localhost:5003/api/v1/orderStatus/1   -H "Authorization: Bearer <USER_TOKEN>"
 #    pending -> reserved -> paid -> confirmed
 ```
 
@@ -227,13 +293,21 @@ charged twice.
 
 Endpoint reference:
 
-| Service | Method | Path |
+| Service | Path | Who can call it |
 |---|---|---|
-| auth | POST | `/api/v1/admins`, `/api/v1/users`, `/api/v1/auth/login`, `/api/v1/auth/refresh` |
-| product | POST/GET/PUT/DELETE | `/api/v1/createproduct`, `/products`, `/product/:id`, `/product/slug/:slug`, `/updateproduct/:id`, `/deleteproduct/:id` |
-| inventory | GET/POST | `/api/v1/stock/:id`, `/stocks`, `/reservedstocks`, `/reservedstock/:id`, `/updatestock` |
-| order | POST/GET | `/api/v1/createorder`, `/order/:id`, `/orderStatus/:id` |
-| payment | POST | `/api/v1/create-payment` |
+| auth | `POST /api/v1/admins`, `/users`, `/auth/login`, `/auth/refresh` | anyone (rate limited) |
+| product | `GET /api/v1/products`, `/product/:id`, `/product/slug/:slug` | anyone - it is a catalogue |
+| product | `POST /createproduct`, `PUT /updateproduct/:id`, `DELETE /deleteproduct/:id` | admin |
+| inventory | `GET /api/v1/stock/:id`, `/stocks`, `/reservedstocks`, `/reservedstock/:id` | peer service (`x-service-token`) or admin |
+| inventory | `POST /updatestock` | admin |
+| order | `POST /api/v1/createorder` | customer |
+| order | `GET /order/:id`, `/orderStatus/:id` | the owner, an admin, or a peer service |
+| payment | `POST /api/v1/create-payment` | admin (manual retries) |
+| payment | `POST /webhooks/stripe` | Stripe, by signature |
+| all | `GET /health`, `/ready`, `/metrics` | anyone (exempt from rate limiting) |
+
+Every internal read is authenticated as of Phase 8. `/reservedstocks` used to
+return every order reservation in the system to anyone who could reach the port.
 
 Watch the trace while this runs. Every event carries the same `correlationId`, so one
 order reads as one unbroken chain - including the payment hop, which used to start a new

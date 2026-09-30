@@ -1,5 +1,8 @@
 // Tracing first: it patches modules as they are required.
 import "./tracing";
+// Then config: a misconfigured service should fail here, not three
+// layers down when something reads an env var that was never set.
+import "./config/env";
 import User from "./model";
 import router from "./routes";
 import connect from "./config/db";
@@ -14,14 +17,22 @@ import {
   stopTracing,
 } from "@edoms/shared-observability";
 import { dependencies } from "./observability";
+import { runMigrations } from "./config/migrator";
+import helmet from "helmet";
+import { apiLimiter } from "./middleware/security";
 import logger from "./utils/logger";
 
 (async () => {
   try {
     await connect.authenticate();
     logger.info("Connection successful");
-    await User.sync({ force: false });
-    logger.info("Users table synced");
+
+    /*
+     * Migrations, not sync({ alter: true }). The old call re-added a
+     * unique index on every boot because Sequelize could not recognise
+     * the one it made last time - see migrations/0002.
+     */
+    await runMigrations();
   } catch (error) {
     logger.error("Startup failed", error);
   }
@@ -36,9 +47,17 @@ const app = express();
  * Correlation first: anything mounted above it logs without a correlationId,
  * and an inbound x-correlation-id has to be honoured before a handler runs.
  */
+/*
+ * Security headers before anything else answers. helmet removes the
+ * `X-Powered-By: Express` giveaway and sets the usual hardening headers; the
+ * default CSP is off because these services return JSON, not documents.
+ */
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(apiLimiter);
+
 app.use(correlationMiddleware());
 app.use(requestLogger({ logger }));
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
 
 /* Probes and metrics sit outside /api/v1 - they are for operators, not clients. */
 app.get("/health", healthHandler("auth-service"));

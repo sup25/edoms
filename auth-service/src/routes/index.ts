@@ -9,11 +9,19 @@ import { authMiddleware } from "../middleware/authMiddleware";
 import { validate } from "../middleware/validateRequest";
 import { authSchema } from "../validations/auth.schema";
 
+import { authLimiter } from "../middleware/security";
+
 const router = express.Router();
-router.post("/admins", validate(authSchema), adminRegisterController);
-router.post("/users", validate(authSchema), userRegisterController);
-router.post("/auth/login", validate(authSchema), LoginController);
-router.post("/auth/refresh", RefreshAccessTokenController);
+/*
+ * Credential endpoints get their own, much tighter budget. These are where
+ * guessing pays off, so they should not share the general API allowance.
+ * `authLimiter` counts failures only, so a legitimate user's own successful
+ * logins never lock them out.
+ */
+router.post("/admins", authLimiter, validate(authSchema), adminRegisterController);
+router.post("/users", authLimiter, validate(authSchema), userRegisterController);
+router.post("/auth/login", authLimiter, validate(authSchema), LoginController);
+router.post("/auth/refresh", authLimiter, RefreshAccessTokenController);
 router.get("/protected", authMiddleware, (req: Request, res: Response) => {
   res.status(200).json({
     success: true,

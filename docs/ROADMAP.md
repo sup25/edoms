@@ -163,46 +163,84 @@ queue and the fact that the message had been dropped. And `logger.error("msg", s
 spread the string one character per key, because winston `Object.assign`s each extra
 argument.
 
-## Phase 7 - Local environment and delivery
+## Phase 7 - Local environment and delivery (DONE, one item deliberately skipped)
 
-- [ ] **`docker-compose.yml`** at the root: postgres (five DBs), rabbitmq with the
-      management UI, redis, and all five services. Currently there is no compose file and
-      every service is started by hand.
-- [ ] **Dockerfile per service** (multi-stage).
-- [ ] **`.env.example` per service** - the README tells you to copy one, but none exist.
-- [ ] **Sequelize migrations.** Replace `sync({ alter: true })` on boot, which silently
-      mutates the schema at runtime.
-- [ ] **npm workspaces** at the root so the shared events package is linked, with one
-      root `npm run dev`.
-- [ ] **GitHub Actions**: typecheck, lint, test, build on every PR.
-- [ ] **Graceful shutdown** - drain in-flight messages, close channels and the DB pool on
-      `SIGTERM`.
+- [x] **`docker-compose.yml`** at the root: postgres with the five databases created
+      by an init script, rabbitmq with the management UI, redis, and all five
+      services. Health checks gate startup, so a service never runs its first
+      migration against a server that is still initialising. Redis is deliberately
+      NOT a dependency of any service - it is a cache, the system runs without it,
+      and declaring a hard dependency would claim otherwise.
+- [x] **Dockerfile (multi-stage).** One file parameterised by `SERVICE` rather than
+      five near-identical copies, which would drift. The build context is the repo
+      root, because each service depends on the two shared packages through
+      `file:../packages/...` and npm cannot resolve those from a service-scoped
+      context. Runs as the `node` user, not root.
+- [x] **`.env.example` per service** (landed in Phase 6), plus a root one for compose.
+- [x] **Sequelize migrations.** umzug, recorded in `migrations_meta`. See the note
+      below: `sync({ alter: true })` had done real damage, not just theoretical.
+- [ ] **npm workspaces.** *Deliberately not done.* Phase 2 chose `file:` links over a
+      root workspace because a workspace reinstall would churn five working
+      `node_modules`, and that reasoning still holds - more so now that the
+      Dockerfile installs per service anyway, which is what workspaces would
+      mostly have bought. Revisit if the shared packages multiply.
+- [x] **GitHub Actions**: typecheck, test and build per service in a matrix, plus a
+      docker build per service and a compose-file validation. No lint step - there
+      is no linter configured in this repo to run.
+- [x] **Graceful shutdown** - landed in Phase 1 for the four broker services, and in
+      Phase 6 for auth-service.
 
-## Phase 8 - Security and hardening
+**What `sync({ alter: true })` had actually done.** Sequelize cannot recognise a
+unique constraint it created on an earlier boot, so it added another every time a
+service started. Across the five databases there were **506 indexes where about
+fifteen were wanted** - 386 identical unique constraints on `Products.slug` alone,
+and 18 to 38 on each service's `outbox_events.event_id`. Every `npm run dev` added
+more, and each one is maintained on every insert, so the outbox relay was paying
+for dozens of copies of the same uniqueness check. Migration `0002` removes them;
+the count is 35 now and stays there.
 
-- [ ] **Use the authenticated identity on order creation.** `/createorder` is already
-      behind `requireUser`, but `createOrderController` reads `userId` from `req.body` and
-      ignores `req.user`, so an authenticated user can order as someone else. Take the id
-      from `req.user`.
-- [ ] **Authenticate the order read endpoints.** `GET /order/:id` and
-      `GET /orderStatus/:id` have NO guard at all - no token, and no ownership check
-      inside the controller either - so any order in the system can be read by
-      guessing an integer id. Phase 5 made `/orderStatus/:id` the primary way a client
-      learns its outcome (202 + `statusUrl`), which promoted an open IDOR endpoint to
-      the main read path. Add `requireUser` and filter by owner in the service layer.
-- [ ] **Authenticate `POST /create-payment`.** payment-service mounts it with no guard.
-      Phase 5 kept it for manual retries, but it is open to anyone. The Stripe
-      idempotency key (`payment-<orderId>`) prevents a *double* charge; it does not
-      prevent a stranger triggering the *first* one.
-- [ ] **Service-to-service auth** for the remaining internal REST calls.
-- [ ] **Centralise config.** Validate env vars at boot with Zod and fail fast; no more
-      `new Redis()` with no URL and no error handler.
-- [ ] **Rate limiting and input sanitisation** (the README claims both; neither is wired
-      up everywhere).
-- [ ] **Stripe webhooks** instead of relying on the synchronous confirm result, so a
-      dropped response cannot lose a real charge.
-- [ ] **Rotate the Stripe key** if the working-tree `.env` files were ever shared. They
-      are untracked, which is good, but check history before making the repo public.
+## Phase 8 - Security and hardening (DONE)
+
+Verified live: `npm run smoke` asserts each of these directly, and the suite is
+5/5. 209 unit tests.
+
+- [x] **Use the authenticated identity on order creation.** The owner comes from
+      `req.user` now, and `userId` is gone from the request schema entirely, so
+      there is nothing left to spoof.
+- [x] **Authenticate the order read endpoints.** Both are guarded, and ownership is
+      enforced in the service layer where the row is read. Someone else's order
+      answers "Order not found" - identical to one that does not exist, because a
+      403 would confirm which ids are real.
+- [x] **Authenticate `POST /create-payment`.** Admin only: since Phase 5 the saga
+      charges by itself, so this exists for operator retries.
+- [x] **Service-to-service auth.** `requireService` accepts a peer's shared token or
+      an admin JWT. This also closed something that was never tracked:
+      inventory-service's reads were entirely open, and `/reservedstocks` returned
+      EVERY order reservation in the system to anyone who could reach the port.
+      Callers use a `serviceClient` that attaches the token, so a new call site
+      cannot forget it.
+- [x] **Centralise config.** Zod-validated env per service, checked at boot, so a
+      misconfigured service never starts. Found `JWT_SECRET` was **6 characters**
+      in every service - the secret protecting every auth decision above. The
+      schema refuses anything under 16.
+- [x] **Rate limiting and input sanitisation.** helmet plus per-IP limits, neither
+      of which existed anywhere despite the README claiming both. Credential
+      endpoints get a tighter budget counting failures only. Probes are exempt: a
+      429 on `/health` reads as the service being unhealthy.
+- [x] **Stripe webhooks.** The outcome of a charge used to come only from the
+      synchronous `paymentIntents.confirm` response, so a lost response meant the
+      money moved and nothing downstream heard - the order sat in `paid` limbo,
+      which the saga deliberately never expires. The webhook is authoritative now
+      and publishes the domain event; the synchronous path still publishes too,
+      and whichever arrives second is a no-op. Idempotent via a
+      `processed_webhooks` ledger, because Stripe retries for up to three days.
+- [ ] **Rotate the Stripe key** if the working-tree `.env` files were ever shared.
+      Still open, and a human decision. `JWT_SECRET` was rotated locally as part
+      of the above.
+
+**Left for later:** mTLS or a mesh identity between services. The shared secret
+prevents an outside caller reaching the port; it does not stop one service
+impersonating another. That belongs with the container work.
 
 ## Phase 9 - Docs
 

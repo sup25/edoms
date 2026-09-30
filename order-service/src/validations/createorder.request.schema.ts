@@ -10,11 +10,15 @@ const OrderItemSchema = z.object({
   }),
 });
 
-// Define the schema for the entire request body
+/*
+ * Define the schema for the entire request body.
+ *
+ * No `userId`. It used to be required here and read straight out of the body
+ * by the controller, which let any authenticated customer place an order as
+ * someone else. The owner comes from the verified token now, so accepting the
+ * field at all would only invite confusion about which one wins.
+ */
 const CreateOrderRequestSchema = z.object({
-  userId: z.number().int().positive({
-    message: "User ID must be a positive integer",
-  }),
   items: z.array(OrderItemSchema).nonempty({
     message: "Items must be a non-empty array",
   }),

@@ -1,0 +1,213 @@
+# EDOMS, whole system, one command:
+#
+#   docker compose up --build
+#
+# Before this there was no compose file and all five services were started by
+# hand, each needing its own terminal and its own .env.
+#
+# Infrastructure only, leaving the services on the host, is often what you
+# actually want while developing:
+#
+#   docker compose up postgres rabbitmq redis
+#   npm run dev
+
+name: edoms
+
+# Every service shares the same shape, so the differences stay readable.
+x-service-base: &service-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+  environment: &service-env
+    NODE_ENV: production
+    DB_HOST: postgres
+    DB_PORT: 5432
+    DB_USERNAME: postgres
+    DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    BROKER_URL: amqp://rabbitmq:5672
+    REDIS_HOST: redis
+    REDIS_PORT: 6379
+    # Must be identical everywhere: auth-service signs, the rest verify.
+    JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env at the repo root}
+    SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env at the repo root}
+    LOG_FORMAT: json
+    # Containers restart and several replicas would race. Compose runs one of
+    # each, so on-boot migration is fine here; a real deployment should set
+    # this false and migrate as a deploy step.
+    MIGRATE_ON_BOOT: "true"
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # The init script creates the five service databases; this one just
+      # gives the entrypoint something to connect to.
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sh:/docker-entrypoint-initdb.d/10-databases.sh:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # Services must not start against a server that is still initialising -
+      # they would fail their first migration and restart-loop.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_UI_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # Deliberately NOT a dependency of any service. Redis is a cache here:
+    # cache reads fall back to their source and cache writes are wrapped, so
+    # the system runs without it. Making it a hard dependency would claim
+    # otherwise.
+
+  auth-service:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: auth-service
+    environment:
+      <<: *service-env
+      PORT: 5000
+      DB_NAME: auth_service
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  product-service:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: product-service
+    environment:
+      <<: *service-env
+      PORT: 5001
+      DB_NAME: product_service
+      INVENTORY_SERVICE_URL: http://inventory-service:5002/api/v1
+    ports:
+      - "5001:5001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  inventory-service:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: inventory-service
+    environment:
+      <<: *service-env
+      PORT: 5002
+      DB_NAME: inventory_service
+    ports:
+      - "5002:5002"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  order-service:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: order-service
+    environment:
+      <<: *service-env
+      PORT: 5003
+      DB_NAME: order_service
+      PRODUCT_SERVICE_URL: http://product-service:5001
+      STOCK_SERVICE_URL: http://inventory-service:5002
+    ports:
+      - "5003:5003"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  payment-service:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: payment-service
+    environment:
+      <<: *service-env
+      PORT: 5004
+      DB_NAME: payment_service
+      ORDER_URL: http://order-service:5003/api/v1/order
+      RESERVED_STOCK_URL: http://inventory-service:5002/api/v1/reservedstock
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:?set STRIPE_SECRET_KEY in .env at the repo root}
+      STRIPE_TEST_PAYMENT_METHOD: ${STRIPE_TEST_PAYMENT_METHOD:-pm_card_visa}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    ports:
+      - "5004:5004"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5004/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  redis-data:

@@ -1,4 +1,4 @@
-import axios from "axios";
+import { serviceClient } from "../utils/serviceClient";
 import { cacheWrite } from "../utils/cache";
 import redis from "../utils/redis";
 import { EventType } from "@edoms/shared-events";
@@ -22,7 +22,7 @@ export async function handleStockRollBack(event: any) {
       }
 
       // Fetch the updated stock from the Inventory Service
-      const stockResponse = await axios.get(
+      const stockResponse = await serviceClient.get(
         `${INVENTORY_SERVICE_URL}/stock/${productId}`
       );
       const rollbackStock = stockResponse.data.data?.toString() || "0"; // Convert to string for Redis
