@@ -246,14 +246,16 @@ curl -X POST http://localhost:5000/api/v1/auth/login   -H "Content-Type: applica
 # 2. Create a product. Requires name, price (a NUMBER, not a string),
 #    and slug (min 6 chars). Admin token required.
 #    Tracer: product_created -> inventory initializes stock.
-curl -X POST http://localhost:5001/api/v1/createproduct   -H "Content-Type: application/json"   -H "Authorization: Bearer <ADMIN_TOKEN>"   -d '{"name":"Test Widget","price":19.99,"slug":"test-widget"}'
+curl -X POST http://localhost:5001/api/v1/createproduct   -H "Content-Type: application/json"   -H "Authorization: Bearer <ADMIN_TOKEN>"   -d '{"name":"Test Widget","price":19.99,"slug":"test-widget","stock":100}'
 ```
 
 ```bash
-# 3. Set the stock. THIS STEP IS REQUIRED.
-#    The product_created event carries no stock field, so inventory
-#    initializes the product at 0 and any order would fail on
-#    "Insufficient stock". See defect #6 in AI_CONTEXT.md.
+# 3. Adjust the stock. Only required if you left `stock` out above.
+#    createproduct now carries the opening stock on the product_created
+#    event (defect #16), so the call above already opened the row at 100.
+#    Omit `stock` there and inventory opens it at 0, and any order fails
+#    on "Insufficient stock" until you run this. Shown either way, since
+#    this is also how you restock later.
 curl -X POST http://localhost:5002/api/v1/updatestock   -H "Content-Type: application/json"   -H "Authorization: Bearer <ADMIN_TOKEN>"   -d '{"id":1,"stock":100}'
 ```
 
