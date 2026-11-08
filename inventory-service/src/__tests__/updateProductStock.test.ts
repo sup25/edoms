@@ -84,6 +84,11 @@ describe("Product Stock Management", () => {
     mockTransaction = {
       LOCK: { UPDATE: "UPDATE" },
     };
+    // The controller owns the transaction now and passes it down, so every
+    // test needs it to actually run the callback.
+    (connectdb.transaction as jest.Mock).mockImplementation(async (cb) =>
+      cb(mockTransaction)
+    );
     mockReq = { body: { id: 1, stock: 10 } } as MockRequest;
     mockRes = {
       status: jest.fn().mockReturnThis(),
@@ -110,17 +115,15 @@ describe("Product Stock Management", () => {
       MockStock.findByPk.mockResolvedValue(mockStockInstance);
       mockStockInstance.save.mockResolvedValue(mockStockInstance);
 
-      // Mock the transaction
-      (connectdb.transaction as jest.Mock).mockImplementation(async (cb) => {
-        return cb(mockTransaction);
-      });
-
       // Since we're testing the real service, unmock it for this test
       jest.unmock("../service");
       const { updateProductStockService } = jest.requireActual("../service");
 
       // Call the service
-      const result = await updateProductStockService({ id: 1, stock: 10 });
+      const result = await updateProductStockService(
+        { id: 1, stock: 10 },
+        mockTransaction
+      );
 
       // Assertions
       expect(MockStock.findByPk).toHaveBeenCalledWith(1, {
@@ -158,17 +161,18 @@ describe("Product Stock Management", () => {
         });
       });
 
-      // Mock the transaction
-      (connectdb.transaction as jest.Mock).mockImplementation(async (cb) => {
-        return cb(mockTransaction);
-      });
-
       jest.unmock("../service");
       const { updateProductStockService } = jest.requireActual("../service");
 
       // Simulate two concurrent updates
-      const update1 = updateProductStockService({ id: 1, stock: 10 });
-      const update2 = updateProductStockService({ id: 1, stock: 15 });
+      const update1 = updateProductStockService(
+        { id: 1, stock: 10 },
+        mockTransaction
+      );
+      const update2 = updateProductStockService(
+        { id: 1, stock: 15 },
+        mockTransaction
+      );
 
       const [result1, result2] = await Promise.all([update1, update2]);
 
@@ -197,15 +201,11 @@ describe("Product Stock Management", () => {
 
       MockStock.findByPk.mockResolvedValue(mockStockInstance);
 
-      (connectdb.transaction as jest.Mock).mockImplementation(async (cb) => {
-        return cb(mockTransaction);
-      });
-
       jest.unmock("../service");
       const { updateProductStockService } = jest.requireActual("../service");
 
       await expect(
-        updateProductStockService({ id: 1, stock: -5 })
+        updateProductStockService({ id: 1, stock: -5 }, mockTransaction)
       ).rejects.toThrow("Stock cannot be negative");
     });
   });
@@ -230,20 +230,50 @@ describe("Product Stock Management", () => {
 
       await updateProductStockController(mockReq, mockRes, mockNext);
 
-      expect(updateProductStockService).toHaveBeenCalledWith({
-        id: 1,
-        stock: 10,
-      });
+      expect(updateProductStockService).toHaveBeenCalledWith(
+        { id: 1, stock: 10 },
+        mockTransaction
+      );
+      // The same transaction the service wrote under, not a second one.
       expect(publishToOutbox).toHaveBeenCalledWith(
         EventType.STOCK_UPDATED,
         { productId: 1, stock: 10 },
-        expect.anything() // transaction
+        mockTransaction
       );
+      // One transaction for both. This is the regression guard: the service
+      // used to open its own and the controller a second one for the publish.
+      expect(connectdb.transaction).toHaveBeenCalledTimes(1);
       expect(mockRes.status).toHaveBeenCalledWith(200);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: true,
         message: "product Stock updated successfully",
         data: mockStockInstance,
+      });
+    });
+
+    it("fails the request when the event cannot be written", async () => {
+      /*
+       * The outbox write happens inside the controller's transaction, so a
+       * failure to record the event propagates out of it and sequelize rolls
+       * the stock change back. The rollback itself belongs to sequelize and is
+       * not observable through this mock; what is asserted here is that the
+       * failure reaches the caller instead of being reported as a success.
+       */
+      const mockStockInstance = { productId: 1, stock: 10 };
+      (updateProductStockService as jest.Mock).mockResolvedValue(
+        mockStockInstance
+      );
+      (publishToOutbox as jest.Mock).mockRejectedValue(
+        new Error("outbox insert failed")
+      );
+
+      await updateProductStockController(mockReq, mockRes, mockNext);
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        message: "Internal Server Error",
+        data: null,
       });
     });
 
