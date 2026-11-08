@@ -64,14 +64,29 @@ export const updateProductStockController = expressAsyncHandler(
   async (req: Request, res: Response) => {
     const { id, stock } = req.body;
     try {
-      const updatedStock = await updateProductStockService({ id, stock });
-      await sequelize.transaction(async (transaction) =>
-        publishToOutbox(
+      /*
+       * One transaction for the write AND the event. These used to be two:
+       * the service committed the new stock, then this opened a second
+       * transaction to publish. A crash in between committed the stock and
+       * lost the event, so product-service's Redis cache kept serving the old
+       * number with nothing left to correct it - the exact dual-write gap the
+       * outbox pattern exists to close, and which the rest of this codebase
+       * closes correctly.
+       */
+      const updatedStock = await sequelize.transaction(async (transaction) => {
+        const updated = await updateProductStockService(
+          { id, stock },
+          transaction
+        );
+
+        await publishToOutbox(
           EventType.STOCK_UPDATED,
           { productId: id, stock: stock },
           transaction
-        )
-      );
+        );
+
+        return updated;
+      });
       res.status(STATUS_CODES.OK).json({
         success: true,
         message: "product Stock updated successfully",
